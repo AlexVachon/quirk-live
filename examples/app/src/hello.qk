@@ -6,4 +6,8 @@ struct HelloPage : live.Page {
     define on_load(self) -> void {
         self.name = self.param("name")          // from /hello/:name
     }
+
+    define template(self) -> String {
+        return r"""<h1 id="hello">Hello, {{ name }}!</h1>"""
+    }
 }

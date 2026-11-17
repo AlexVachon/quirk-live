@@ -2,8 +2,8 @@
 live — interactive web pages written in Quirk and HTML, like Vue but
 running on the server.
 
-A component is a struct (state in fields, actions in methods) with an HTML
-template next to it — `counter_page.html` for `CounterPage`. Templates show
+A component is a struct: state in fields, actions in methods, and its HTML
+template in `template()`. Templates show
 fields (`{{ count }}`), call methods on events (`@click="add(1)"`), bind
 inputs (`model="draft"`) and use other components as tags (`<PlusButton />`).
 After each event the page is rendered again and the browser updates in place
@@ -24,9 +24,11 @@ struct CounterPage : live.Page {
         self.count = self.count + n
     }
 
-    // Or put it in counter_page.html, next to this file.
     define template(self) -> String {
-        return "<h1>{{ count }}</h1><button @click=\"add(1)\">+1</button>"
+        return r"""
+            <h1>{{ count }}</h1>
+            <button @click="add(1)">+1</button>
+        """
     }
 }
 
@@ -73,8 +75,8 @@ extern define method_names(obj: Any) -> List
 
 ---
 A component: a struct with its state in fields and its HTML in a template
-— `counter_page.html` next to the `.qk` file (or the `.qk` file's own name,
-`counter.html`), or returned from `template()`:
+— returned from `template()` (a raw string, `r"""..."""`), or in the file
+named after the struct (`counter_page.html`) next to the `.qk` file:
 
     <h1>Count: {{ count }}</h1>
     <button @click="add(1)">+1</button>         calls self.add(1)
@@ -1807,8 +1809,8 @@ struct Table : Widget {
 
 ---
 A page: a Component the router serves (`router.add("/todos", TodoPage)`).
-Write its HTML in a template (`todo_page.html` next to the .qk file), or
-build it from widgets by overriding `build()`:
+Write its HTML in `template()`, or build it from widgets by overriding
+`build()`:
 
     define build(self) -> live.Widget {
         return live.Column([

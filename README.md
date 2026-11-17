@@ -1,8 +1,8 @@
 # live
 
 Interactive web pages written in Quirk and HTML — like Vue, but the
-components run on the server. A component is a **struct** (its state in
-fields, its actions in methods) with an **HTML template** next to it. A click
+components run on the server. A component is a **struct**: its state in
+fields, its actions in methods, and its **HTML template** in the same file. A click
 or a keystroke calls a method on the server, the page is rendered again, and
 the browser updates in place — no reload, and **no JavaScript to write** (a
 small fixed script that ships with this package does the browser's part).
@@ -10,13 +10,11 @@ It runs inside a [`web`](https://github.com/AlexVachon/quirk-web) app.
 
 ```
 myapp/
-├── index.html            the base page: <slot /> is where each page goes
-├── router.qk             which page is at which path
-├── main.qk               the server
+├── index.html      the base page: <slot /> is where each page goes
+├── router.qk       which page is at which path
+├── main.qk         the server
 └── src/
-    ├── counter.qk        struct CounterPage, struct PlusButton
-    ├── counter_page.html CounterPage's template
-    └── plus_button.html  PlusButton's template
+    └── counter.qk  struct CounterPage and struct PlusButton, each with its template
 ```
 
 `src/counter.qk`:
@@ -34,6 +32,18 @@ struct CounterPage : live.Page {
     define add(self, n: Int) -> void {
         self.count = self.count + n
     }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Count: {{ count }}</h1>
+            <div class="buttons">
+              <button @click="add(-1)">−1</button>
+              <PlusButton :page="self" :step="1" />
+              <PlusButton :page="self" :step="10" />
+            </div>
+            {% if count >= 10 %}<p>That's a lot!</p>{% end %}
+        """
+    }
 }
 
 struct PlusButton : live.Component {
@@ -43,26 +53,15 @@ struct PlusButton : live.Component {
     define press(self) -> void {
         self.page.add(self.step)
     }
+
+    define template(self) -> String {
+        return r"""<button class="plus" @click="press">+{{ step }}</button>"""
+    }
 }
 ```
 
-`src/counter_page.html`:
-
-```html
-<h1>Count: {{ count }}</h1>
-<div class="buttons">
-  <button @click="add(-1)">−1</button>
-  <PlusButton :page="self" :step="1" />
-  <PlusButton :page="self" :step="10" />
-</div>
-{% if count >= 10 %}<p>That's a lot!</p>{% end %}
-```
-
-`src/plus_button.html`:
-
-```html
-<button class="plus" @click="press">+{{ step }}</button>
-```
+`r"""…"""` is a raw string: `$` and backslashes stay as written, so the
+template is exactly the HTML you see.
 
 `router.qk`:
 
@@ -108,10 +107,11 @@ list with live search, navigation — is in `examples/app`:
 ## Components
 
 A component is a struct that extends `live.Component`; a page extends
-`live.Page` (a component the router serves). Its template is the `.html`
-file named after the struct (`TodoRow` → `todo_row.html`) next to its `.qk`
-file — or the `.qk` file's own name (`counter.html`) — or the String its
-`template(self)` method returns. Template files are re-read when they change.
+`live.Page` (a component the router serves). Its template is what its
+`template(self)` method returns. If you'd rather keep the HTML in its own
+file, leave `template()` out and put it in the `.html` file named after the
+struct (`TodoRow` → `todo_row.html`) next to the `.qk` file; template files
+are re-read when they change.
 
 | | |
 |---|---|
@@ -246,8 +246,8 @@ served with `live.page(app, "/", fn(req) { return Counter() })`.
 
 ## Requirements
 
-Quirk 7.44.0 or newer (run-time reflection; a page struct passed by name to
-`router.add`), and the `web` package (bundled with Quirk).
+Quirk 7.44.0 or newer (run-time reflection, raw strings, a page struct
+passed by name to `router.add`), and the `web` package (bundled with Quirk).
 
 ## License
 

@@ -18,6 +18,22 @@ struct CounterPage : live.Page {
     define title(self) -> String {
         return "Counter (" + String(self.count) + ")"
     }
+
+    define template(self) -> String {
+        return r"""
+            <section class="counter">
+              <h1>Counter</h1>
+              <p class="count">{{ count }}</p>
+              <div class="buttons">
+                <button @click="add(-1)">−1</button>
+                <PlusButton :page="self" :step="1" />
+                <PlusButton :page="self" :step="10" />
+                <button @click="reset">reset</button>
+              </div>
+              {% if count >= 10 %}<p class="note">That's a lot!</p>{% end %}
+            </section>
+        """
+    }
 }
 
 // A component of your own, used in the page's template as <PlusButton />.
@@ -27,5 +43,9 @@ struct PlusButton : live.Component {
 
     define press(self) -> void {
         self.page.add(self.step)
+    }
+
+    define template(self) -> String {
+        return r"""<button class="plus" @click="press">+{{ step }}</button>"""
     }
 }
