@@ -1,0 +1,13 @@
+<h1>Todos</h1>
+<div class="add">
+  <input model="draft" placeholder="Something to do" @enter="add()">
+  <button @click="add">Add</button>
+</div>
+<input model="filter" placeholder="Search">
+<ul>
+  {% for item in shown %}
+    <TodoRow :text="item.text" :index="item.index" :key="item.index" @remove="remove" />
+  {% else %}
+    <li class="empty">Nothing here</li>
+  {% end %}
+</ul>

@@ -1,9 +1,0 @@
-use live
-
-define nav() -> live.Widget {
-    return live.Row([
-        live.Link("Counter", "/"),
-        live.Link("Todos", "/todos"),
-        live.Link("Hello", "/hello/world"),
-    ]).with_class("nav")
-}

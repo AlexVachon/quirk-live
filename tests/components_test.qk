@@ -1,0 +1,82 @@
+// Template components: .html files next to the .qk, <Component /> tags,
+// @events, model=, props, emit, slots, {% if %} / {% for %}.
+use web
+use live
+use test
+from components.counter use { CounterPage, PlusButton }
+from components.todos use { TodoPage, Card }
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/", CounterPage)
+    router.add("/todos", TodoPage)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_template_file_components_and_events() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("<h1>Count: 0</h1>"), s.html)
+    test.assert_true(s.html.contains("+1 (0)"))
+    test.assert_true(s.html.contains("+10 (0)"))
+    test.assert_false(s.html.contains("That's a lot"))
+    s.click("+1 (0)")
+    test.assert_true(s.html.contains("Count: 1"), s.html)
+    test.assert_true(s.html.contains("+1 (1)"))                  // the child keeps its own state
+    test.assert_true(s.html.contains("last press: 1"))           // emit → the page's handler
+    s.click("+10 (0)")
+    test.assert_true(s.html.contains("Count: 11"))
+    test.assert_true(s.html.contains("class=\"big\""))
+    test.assert_eq(s.title, "Counter 11")
+    s.click("-1")
+    s.click("reset")
+    test.assert_true(s.html.contains("Count: 0"))
+    s.click("-1")
+    test.assert_true(s.html.contains("<p>negative</p>"))
+    test.assert_true(s.html.contains("+1 (1)"))
+}
+
+define test_model_forms_props_and_slots() -> void {
+    s := live.TestSession(make_app())
+    s.open("/todos")
+    test.assert_true(s.html.contains("<li title=\"milk\"><b>milk</b> <button"), s.html)
+    s.type("New item", "bread")
+    test.assert_true(s.html.contains("value=\"bread\""))
+    s.submit("New item", "bread")
+    test.assert_true(s.html.contains("<b>bread</b>"))
+    test.assert_true(s.html.contains("placeholder=\"New item\""))
+    test.assert_true(s.html.contains("value=\"\" placeholder=\"New item\""))   // cleared
+    s.type("New item", "<i>jam</i>")
+    s.click("Add")
+    test.assert_true(s.html.contains("<b>&lt;i&gt;jam&lt;/i&gt;</b>"))         // escaped
+    test.assert_true(s.html.contains("3 items"))
+    s.type("Search", "rea")
+    test.assert_true(s.html.contains("<b>bread</b>"))
+    test.assert_false(s.html.contains("<b>milk</b>"))
+    s.type("Search", "")
+    s.check("done only")
+    test.assert_true(s.html.contains("checked"))
+    test.assert_true(s.html.contains(", done only"))
+    s.choose("high")
+    test.assert_true(s.html.contains("<option value=\"high\" selected>"))
+    test.assert_true(s.html.contains("level high"))
+    s.submit_form("text", {"text": "eggs"})
+    test.assert_true(s.html.contains("<b>eggs!</b>"))
+    // the × in the first Card: emit("remove", 0) → TodoPage.remove(0)
+    s.click("×")
+    test.assert_false(s.html.contains("<b>milk</b>"))
+    test.assert_true(s.html.contains("<b>bread</b>"))
+}
+
+define test_template_errors_are_clear() -> void {
+    msg := ""
+    try {
+        live.Component()._root_html()
+    } catch (e: ValueError) {
+        msg = e.message
+    }
+    test.assert_true(msg.contains("no template for Component"), msg)
+}

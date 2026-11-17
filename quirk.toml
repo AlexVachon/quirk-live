@@ -1,7 +1,7 @@
 name          = "live"
 version       = "2.0.0"
 license       = "MIT"
-description   = "Interactive web pages in Quirk only: pages built from widgets (or templates), with state and events that run on the server and update the page live (no JavaScript to write); client-side navigation, TestSession."
+description   = "Interactive web pages in Quirk and HTML, like Vue but on the server: components as structs with HTML templates (@click, model=, <Component /> tags, slots), or built from widgets; a Router of page structs; no JavaScript to write; TestSession."
 repository    = "github.com/AlexVachon/quirk-live"
 quirk-version = ">=7.44.0"
 

@@ -1,5 +1,4 @@
 use live
-from src.nav use { nav }
 
 struct CounterPage : live.Page {
     count: Int
@@ -8,19 +7,12 @@ struct CounterPage : live.Page {
         self.count = 0
     }
 
-    define build(self) -> live.Widget {
-        widgets := [
-            nav(),
-            live.Heading("Counter"),
-            live.Label(String(self.count)).with_class("count"),
-            live.Row([
-                live.Button("−1", on_click=fn() { self.count = self.count - 1 }),
-                PlusButton(self),
-                live.Button("reset", on_click=fn() { self.count = 0 }),
-            ]),
-        ]
-        if self.count >= 10 { widgets.append(live.Label("That's a lot!")) }
-        return live.Column(widgets)
+    define add(self, n: Int) -> void {
+        self.count = self.count + n
+    }
+
+    define reset(self) -> void {
+        self.count = 0
     }
 
     define title(self) -> String {
@@ -28,16 +20,12 @@ struct CounterPage : live.Page {
     }
 }
 
-// A component of your own: a Button with its own on_click.
-struct PlusButton : live.Button {
+// A component of your own, used in the page's template as <PlusButton />.
+struct PlusButton : live.Component {
     page: CounterPage
+    step: Int
 
-    define __init(self, page: CounterPage) -> void {
-        super().__init("+1")
-        self.page = page
-    }
-
-    define on_click(self) -> void {
-        self.page.count = self.page.count + 1
+    define press(self) -> void {
+        self.page.add(self.step)
     }
 }

@@ -1,11 +1,10 @@
 // The live demo app: quirk run main.qk, then open http://localhost:3000
+// index.html is the base page; src/ has the pages (.qk) and their templates (.html).
 use web
-use live
 use sys
 from router use { router }
 
 define main() -> void {
-    live.configure(head="<link rel=\"stylesheet\" href=\"/style.css\">")
     app := web.App()
     app.use(web.static("public"))
     app.mount("/", router)

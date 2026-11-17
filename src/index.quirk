@@ -1,11 +1,13 @@
 ---
-live — interactive web pages written only in Quirk.
+live — interactive web pages written in Quirk and HTML, like Vue but
+running on the server.
 
-A page is a struct: its state in fields, `on_load()` to set it up when
-someone opens the page, and `build()` returning the widgets to show
-(Label, Button, TextInput, Column, ...). A click or a keystroke runs the
-widget's handler on the server, the page is built again, and the browser
-updates in place — no reload, and no JavaScript or HTML to write.
+A component is a struct (state in fields, actions in methods) with an HTML
+template next to it — `counter_page.html` for `CounterPage`. Templates show
+fields (`{{ count }}`), call methods on events (`@click="add(1)"`), bind
+inputs (`model="draft"`) and use other components as tags (`<PlusButton />`).
+After each event the page is rendered again and the browser updates in place
+— no JavaScript to write.
 
 @example
 use web
@@ -18,12 +20,13 @@ struct CounterPage : live.Page {
         self.count = 0
     }
 
-    define build(self) -> live.Widget {
-        return live.Column([
-            live.Heading("Counter"),
-            live.Label("Count: " + String(self.count)),
-            live.Button("+1", on_click=fn() { self.count = self.count + 1 }),
-        ])
+    define add(self, n: Int) -> void {
+        self.count = self.count + n
+    }
+
+    // Or put it in counter_page.html, next to this file.
+    define template(self) -> String {
+        return "<h1>{{ count }}</h1><button @click=\"add(1)\">+1</button>"
     }
 }
 
@@ -35,45 +38,104 @@ app.mount("/", router)
 app.listen(3000)
 ---
 use web
+use fs
 use crypto
 use encoding.json
+
+// ===== reflection (runtime: src/Runtime/libs/live.c) =====
+// A struct's fields and public methods by name — what templates use. Fields
+// and methods are the struct's own and inherited ones.
+
+--- `obj` has a field `name`. ---
+extern define has_field(obj: Any, name: String) -> Bool
+--- The value of field `name` (null if there's none). ---
+extern define get_field(obj: Any, name: String) -> Any
+--- Set field `name` (false if there's none). ---
+extern define set_field(obj: Any, name: String, value: Any) -> Bool
+--- `obj` has a public method `name`. ---
+extern define has_method(obj: Any, name: String) -> Bool
+--- Call method `name` with `args` (missing ones take their defaults); ValueError if there's none. ---
+extern define call_method(obj: Any, name: String, args: List) -> Any
+--- A new struct of type `name`, made without constructor arguments (null if there's none). ---
+extern define new_struct(name: String) -> Any
+--- The struct's type name ("" for other values). ---
+extern define type_name(obj: Any) -> String
+--- The source file declaring the struct's type. ---
+extern define source_file(obj: Any) -> String
+--- The declared type of field `name` ("Int", "List", ...; "" if unknown). ---
+extern define field_type(obj: Any, name: String) -> String
+--- The struct's field names. ---
+extern define field_names(obj: Any) -> List
+--- The struct's public method names. ---
+extern define method_names(obj: Any) -> List
 
 // ===== components =====
 
 ---
-A template component — the HTML way to write a page (`live.Page` is the
-widget way). Subclass it. Keep its state in fields; return its
-HTML from `render()` (usually `live.html(template, data)`); react to the
-events its template names in `handle(event, data)`:
+A component: a struct with its state in fields and its HTML in a template
+— `counter_page.html` next to the `.qk` file (or the `.qk` file's own name,
+`counter.html`), or returned from `template()`:
 
-    <button q-click="save">          a click      (data: q-value / data-* attributes)
-    <form q-submit="add">            a submit     (data: the form's fields)
-    <input q-input="search">         typing       (data["value"], sent after a pause)
-    <select q-change="pick">         a change     (data["value"]; checkboxes "true"/"false")
-    <input q-enter="send">           Enter key    (data["value"])
-    <a href="/about" q-link>         navigate to another live page without a reload
+    <h1>Count: {{ count }}</h1>
+    <button @click="add(1)">+1</button>         calls self.add(1)
+    <input model="draft" @enter="save">         self.draft follows the field; Enter calls self.save(text)
+    <PlusButton :page="self" />                 another component, by its struct's name
+    {% if count >= 10 %}<p>a lot</p>{% end %}
+    {% for i, item in items %}<li>{{ item }}</li>{% else %}<li>none</li>{% end %}
 
-Override `title()` for the page title. In `handle`, `self.go(path)`
-navigates the browser to another page after the update.
+`on_load()` sets it up (once). Events call its methods by name; the page
+is rendered again after each one. Props: `text="hi {{ name }}"` sets the
+child's `text` field (a String), `:count="n + 1"` sets it to the value;
+`@done="refresh"` runs when the child calls `self.emit("done")`. A
+`<slot />` in a component's template shows what its tag enclosed.
+
+A page is a Component served by a `live.Router` (usually a `live.Page`).
+`title()` sets the page title; `self.go(path)` sends the browser to
+another page. (The 1.0 way, overriding `render()` and `handle(event,
+data)` with `q-click="name"` attributes, still works.)
 ---
 struct Component {
     id: String
     request: web.Request
     _go: String
+    _root: Component
+    _parent: Component
+    _handlers: Map
+    _children: Map
+    _seen: Map
+    _listeners: Map
+    _next: Int
 
     define __init(self) -> void {
         self.id = ""
         self.request = null
         self._go = ""
+        self._root = null
+        self._parent = null
+        self._handlers = {}
+        self._children = {}
+        self._seen = {}
+        self._listeners = {}
+        self._next = 0
     }
 
-    --- The component's HTML (override). ---
-    define render(self) -> String {
+    --- Set up the component's state (override). Runs once, before it's first shown. ---
+    define on_load(self) -> void {
+    }
+
+    --- The component's template (override for one written in the .qk file; "" uses its .html file). ---
+    define template(self) -> String {
         return ""
     }
 
-    --- React to `event` from the page (override); `data` holds the event's values (Strings). ---
+    --- Its HTML (the template, rendered). Override to write HTML yourself. ---
+    define render(self) -> String {
+        return _render_root(self)
+    }
+
+    --- React to `event` from the page. Override only for the 1.0 `q-click="name"` style. ---
     define handle(self, event: String, data: Map) -> void {
+        _dispatch(self, event, data)
     }
 
     --- The page title while this component is shown (override; "" leaves it). ---
@@ -83,11 +145,43 @@ struct Component {
 
     --- After this event, send the browser to `path` (a live page, or any URL). ---
     define go(self, path: String) -> void {
+        if self._root != null and self._root != self {
+            self._root.go(path)
+            return
+        }
         self._go = path
     }
 
-    // Runs once, when the component is made for a visitor (a Page's on_load).
+    --- Tell the parent: runs its `@event="method"` handler, with `value` (if given). ---
+    define emit(self, event: String, value: Any = null) -> void {
+        if self._listeners == null or not self._listeners.has(event) { return }
+        h: List = self._listeners[event]
+        _run_handler(h, value, value != null)
+    }
+
+    --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
+    define param(self, name: String) -> String {
+        r := self._request()
+        if r == null or not r.params.has(name) { return "" }
+        return _text(r.params[name])
+    }
+
+    --- A `?name=value` of the page's URL; "" if none. ---
+    define query(self, name: String) -> String {
+        r := self._request()
+        if r == null or not r.query.has(name) { return "" }
+        return _text(r.query[name])
+    }
+
+    define _request(self) -> web.Request {
+        if self.request != null { return self.request }
+        if self._root != null and self._root != self { return self._root.request }
+        return null
+    }
+
+    // Runs once, when the component is made for a visitor.
     define _start(self) -> void {
+        self.on_load()
     }
 
     // The first widget of the last build labelled `text` (a Page's; else null).
@@ -98,6 +192,1032 @@ struct Component {
     // The component wrapped in its root element (what the page holds).
     define _root_html(self) -> String {
         return "<div q-root=\"" + self.id + "\">" + self.render() + "</div>"
+    }
+}
+
+// ===== templates: parsing =====
+
+struct _TNode {
+    kind: String        // text, expr, raw, if, for, tag, comp, slot
+    text: String        // the text / expression / tag name / iterable
+    attrs: List         // tag, comp: [name, value] pairs
+    children: List
+    branches: List      // if: [condition, children] pairs
+    otherwise: List     // if / for: the else part
+    var1: String
+    var2: String
+    closed: Bool        // tag: written `<x ... />`
+
+    define __init(self, kind: String, text: String = "") -> void {
+        self.kind = kind
+        self.text = text
+        self.attrs = []
+        self.children = []
+        self.branches = []
+        self.otherwise = []
+        self.var1 = ""
+        self.var2 = ""
+        self.closed = false
+    }
+}
+
+define _is_upper(c: String) -> Bool {
+    return c != "" and c >= "A" and c <= "Z"
+}
+
+define _is_letter(c: String) -> Bool {
+    return c != "" and ((c >= "a" and c <= "z") or (c >= "A" and c <= "Z"))
+}
+
+define _tfail(msg: String) -> void {
+    throw ValueError("live template: " + msg)
+}
+
+// Index of the `>` closing the tag that starts at `at` (quotes respected).
+define _tag_end(src: String, at: Int, n: Int) -> Int {
+    j := at + 1
+    quote := ""
+    while j < n {
+        c := web.byte_slice(src, j, 1)
+        if quote != "" {
+            if c == quote { quote = "" }
+        } elif c == "\"" or c == "'" {
+            quote = c
+        } elif c == ">" {
+            return j
+        }
+        j = j + 1
+    }
+    return -1
+}
+
+// A start tag the engine must rewrite: components, <slot>, <option>,
+// @events, model=, :props.
+define _special_tag(raw: String) -> Bool {
+    first := web.byte_slice(raw, 0, 1)
+    if _is_upper(first) or raw.startswith("slot") or raw.startswith("option") { return true }
+    return raw.contains("@") or raw.contains(" model=") or raw.contains(" :")
+}
+
+// [kind, value]: text, expr ({{ }}), stmt ({% %}), open (a special start
+// tag, without < >), close (a component's end tag: its name).
+define _ttokens(src: String) -> List {
+    out := []
+    n := web.byte_length(src)
+    i := 0
+    start := 0
+    while i < n {
+        lt := web.byte_find(src, "<", i)
+        ex := web.byte_find(src, "{{", i)
+        st := web.byte_find(src, "{%", i)
+        nxt := lt
+        if ex >= 0 and (nxt < 0 or ex < nxt) { nxt = ex }
+        if st >= 0 and (nxt < 0 or st < nxt) { nxt = st }
+        if nxt < 0 { break }
+        if nxt == ex or nxt == st {
+            closer := nxt == ex ? "}}" : "%}"
+            close := web.byte_find(src, closer, nxt + 2)
+            if close < 0 { _tfail("'" + web.byte_slice(src, nxt, 2) + "' without '" + closer + "'") }
+            if nxt > start { out.append(["text", web.byte_slice(src, start, nxt - start)]) }
+            out.append([nxt == ex ? "expr" : "stmt", web.byte_slice(src, nxt + 2, close - nxt - 2).trim()])
+            i = close + 2
+            start = i
+            continue
+        }
+        c := web.byte_slice(src, nxt + 1, 1)
+        if _is_letter(c) {
+            end := _tag_end(src, nxt, n)
+            if end < 0 { _tfail("a tag without '>'") }
+            raw := web.byte_slice(src, nxt + 1, end - nxt - 1)
+            if _special_tag(raw) {
+                if nxt > start { out.append(["text", web.byte_slice(src, start, nxt - start)]) }
+                out.append(["open", raw])
+                i = end + 1
+                start = i
+            } else {
+                i = nxt + 1
+            }
+            continue
+        }
+        if c == "/" and (_is_upper(web.byte_slice(src, nxt + 2, 1)) or web.byte_slice(src, nxt + 2, 4) == "slot") {
+            end := web.byte_find(src, ">", nxt)
+            if nxt > start { out.append(["text", web.byte_slice(src, start, nxt - start)]) }
+            out.append(["close", web.byte_slice(src, nxt + 2, end - nxt - 2).trim()])
+            i = end + 1
+            start = i
+            continue
+        }
+        i = nxt + 1
+    }
+    if n > start { out.append(["text", web.byte_slice(src, start, n - start)]) }
+    return out
+}
+
+// Parse a start tag's inside ("button @click='x' disabled") into a node.
+define _tparse_tag(raw: String) -> _TNode {
+    body := raw.trim()
+    closed := body.endswith("/")
+    if closed { body = web.byte_slice(body, 0, web.byte_length(body) - 1).trim() }
+    n := web.byte_length(body)
+    i := 0
+    while i < n and not " \t\n\r".contains(web.byte_slice(body, i, 1)) { i = i + 1 }
+    name := web.byte_slice(body, 0, i)
+    node := _TNode(_is_upper(web.byte_slice(name, 0, 1)) ? "comp" : (name == "slot" ? "slot" : "tag"), name)
+    node.closed = closed
+    while i < n {
+        c := web.byte_slice(body, i, 1)
+        if " \t\n\r".contains(c) {
+            i = i + 1
+            continue
+        }
+        j := i
+        while j < n and not " \t\n\r=".contains(web.byte_slice(body, j, 1)) { j = j + 1 }
+        attr := web.byte_slice(body, i, j - i)
+        value := ""
+        has_value := false
+        k := j
+        while k < n and " \t\n\r".contains(web.byte_slice(body, k, 1)) { k = k + 1 }
+        if k < n and web.byte_slice(body, k, 1) == "=" {
+            has_value = true
+            k = k + 1
+            while k < n and " \t\n\r".contains(web.byte_slice(body, k, 1)) { k = k + 1 }
+            q := web.byte_slice(body, k, 1)
+            if q == "\"" or q == "'" {
+                close := web.byte_find(body, q, k + 1)
+                if close < 0 { close = n }
+                value = web.byte_slice(body, k + 1, close - k - 1)
+                j = close + 1
+            } else {
+                e := k
+                while e < n and not " \t\n\r".contains(web.byte_slice(body, e, 1)) { e = e + 1 }
+                value = web.byte_slice(body, k, e - k)
+                j = e
+            }
+        }
+        node.attrs.append([attr, value, has_value])
+        i = j
+    }
+    return node
+}
+
+struct _TParser {
+    toks: List
+    pos: Int
+
+    define __init(self, toks: List) -> void {
+        self.toks = toks
+        self.pos = 0
+    }
+
+    // Nodes up to a `{% stop %}` (one of `stops`) or a component end tag.
+    define block(self, stops: List, closing: String) -> List {
+        out := []
+        while self.pos < self.toks.length() {
+            t: List = self.toks[self.pos]
+            kind: String = t[0]
+            value: String = t[1]
+            if kind == "close" {
+                if value == closing { return out }
+                _tfail("</" + value + "> without <" + value + ">")
+            }
+            if kind == "stmt" {
+                word := _first_word(value)
+                for s in stops {
+                    stop: String = s
+                    if word == stop { return out }
+                }
+            }
+            self.pos = self.pos + 1
+            if kind == "text" {
+                out.append(_TNode("text", value))
+            } elif kind == "expr" {
+                if value.endswith("| raw") {
+                    out.append(_TNode("raw", web.byte_slice(value, 0, web.byte_length(value) - 5).trim()))
+                } else {
+                    out.append(_TNode("expr", value))
+                }
+            } elif kind == "open" {
+                node := _tparse_tag(value)
+                if node.kind == "comp" and not node.closed {
+                    node.children = self.block([], node.text)
+                    self.pos = self.pos + 1           // the </Name>
+                }
+                out.append(node)
+            } else {
+                out.append(self.statement(value))
+            }
+        }
+        if closing != "" { _tfail("<" + closing + "> without </" + closing + ">") }
+        if stops.length() > 0 { _tfail("{% " + String(stops[0]) + " %} expected") }
+        return out
+    }
+
+    define statement(self, value: String) -> _TNode {
+        word := _first_word(value)
+        rest := web.byte_slice(value, web.byte_length(word), web.byte_length(value) - web.byte_length(word)).trim()
+        if word == "if" {
+            node := _TNode("if")
+            cond := rest
+            while true {
+                body := self.block(["elif", "else", "end"], "")
+                node.branches.append([cond, body])
+                t: List = self.toks[self.pos]
+                v: String = t[1]
+                self.pos = self.pos + 1
+                w := _first_word(v)
+                if w == "elif" {
+                    cond = web.byte_slice(v, 4, web.byte_length(v) - 4).trim()
+                } elif w == "else" {
+                    node.otherwise = self.block(["end"], "")
+                    self.pos = self.pos + 1
+                    return node
+                } else {
+                    return node
+                }
+            }
+        }
+        if word == "for" {
+            at := rest.find(" in ")
+            if at < 0 { _tfail("{% for x in list %} expected, got {% " + value + " %}") }
+            vars := rest.substring(0, at)
+            node := _TNode("for", rest.substring(at + 4, rest.length()).trim())
+            comma := vars.find(",")
+            if comma >= 0 {
+                node.var1 = vars.substring(0, comma).trim()
+                node.var2 = vars.substring(comma + 1, vars.length()).trim()
+            } else {
+                node.var1 = vars.trim()
+            }
+            node.children = self.block(["else", "end"], "")
+            t: List = self.toks[self.pos]
+            v: String = t[1]
+            self.pos = self.pos + 1
+            if _first_word(v) == "else" {
+                node.otherwise = self.block(["end"], "")
+                self.pos = self.pos + 1
+            }
+            return node
+        }
+        _tfail("unknown {% " + value + " %}")
+        return null
+    }
+}
+
+define _first_word(s: String) -> String {
+    sp := s.find(" ")
+    return sp < 0 ? s : s.substring(0, sp)
+}
+
+_tpl_nodes := {}
+
+define _parse_template(src: String) -> List {
+    if _tpl_nodes.has(src) {
+        cached: List = _tpl_nodes[src]
+        return cached
+    }
+    p := _TParser(_ttokens(src))
+    nodes := p.block([], "")
+    _tpl_nodes[src] = nodes
+    return nodes
+}
+
+// ===== templates: expressions =====
+
+_expr_cache := {}
+
+define _etokens(src: String) -> List {
+    if _expr_cache.has(src) {
+        cached: List = _expr_cache[src]
+        return cached
+    }
+    out := []
+    n := web.byte_length(src)
+    i := 0
+    while i < n {
+        c := web.byte_slice(src, i, 1)
+        if " \t\n\r".contains(c) {
+            i = i + 1
+        } elif c == "\"" or c == "'" {
+            close := web.byte_find(src, c, i + 1)
+            if close < 0 { _tfail("unclosed string in '" + src + "'") }
+            out.append(["str", web.byte_slice(src, i + 1, close - i - 1)])
+            i = close + 1
+        } elif c >= "0" and c <= "9" {
+            j := i
+            while j < n and "0123456789.".contains(web.byte_slice(src, j, 1)) { j = j + 1 }
+            out.append(["num", web.byte_slice(src, i, j - i)])
+            i = j
+        } elif _is_letter(c) or c == "_" {
+            j := i
+            while j < n {
+                d := web.byte_slice(src, j, 1)
+                if not (_is_letter(d) or d == "_" or (d >= "0" and d <= "9")) { break }
+                j = j + 1
+            }
+            out.append(["id", web.byte_slice(src, i, j - i)])
+            i = j
+        } else {
+            two := web.byte_slice(src, i, 2)
+            if two == "==" or two == "!=" or two == "<=" or two == ">=" {
+                out.append(["op", two])
+                i = i + 2
+            } elif "<>+-*/%(),.!".contains(c) {
+                out.append(["op", c == "!" ? "not" : c])
+                i = i + 1
+            } else {
+                _tfail("unexpected '" + c + "' in '" + src + "'")
+            }
+        }
+    }
+    _expr_cache[src] = out
+    return out
+}
+
+// What a template's names resolve against: loop variables, then the
+// component's fields and methods.
+struct _Ctx {
+    root: Component
+    comp: Component
+    scopes: List
+    slot: List
+    slot_ctx: _Ctx
+    key: String
+    counts: Map
+    select_value: Any
+    has_select: Bool
+
+    define __init(self, root: Component, comp: Component, key: String) -> void {
+        self.root = root
+        self.comp = comp
+        self.scopes = []
+        self.slot = []
+        self.slot_ctx = null
+        self.key = key
+        self.counts = {}
+        self.select_value = null
+        self.has_select = false
+    }
+
+    define lookup(self, name: String) -> Any {
+        i := self.scopes.length() - 1
+        while i >= 0 {
+            m: Map = self.scopes[i]
+            if m.has(name) { return m[name] }
+            i = i - 1
+        }
+        if name == "self" { return self.comp }
+        if has_field(self.comp, name) { return get_field(self.comp, name) }
+        if has_method(self.comp, name) { return call_method(self.comp, name, []) }
+        _tfail("'" + name + "' isn't a field or method of " + type_name(self.comp))
+        return null
+    }
+
+    define eval(self, src: String) -> Any {
+        e := _Eval(_etokens(src), self, src)
+        v := e.or_expr()
+        if e.pos < e.toks.length() { _tfail("can't read '" + src + "'") }
+        return v
+    }
+}
+
+struct _Eval {
+    toks: List
+    pos: Int
+    ctx: _Ctx
+    src: String
+
+    define __init(self, toks: List, ctx: _Ctx, src: String) -> void {
+        self.toks = toks
+        self.pos = 0
+        self.ctx = ctx
+        self.src = src
+    }
+
+    define peek(self) -> String {
+        if self.pos >= self.toks.length() { return "" }
+        t: List = self.toks[self.pos]
+        k: String = t[0]
+        v: String = t[1]
+        if k == "str" or k == "num" { return "" }
+        return v
+    }
+
+    define take(self, want: String) -> void {
+        if self.peek() != want { _tfail("'" + want + "' expected in '" + self.src + "'") }
+        self.pos = self.pos + 1
+    }
+
+    define or_expr(self) -> Any {
+        v := self.and_expr()
+        while self.peek() == "or" {
+            self.pos = self.pos + 1
+            r := self.and_expr()
+            v = _truthy(v) or _truthy(r)
+        }
+        return v
+    }
+
+    define and_expr(self) -> Any {
+        v := self.not_expr()
+        while self.peek() == "and" {
+            self.pos = self.pos + 1
+            r := self.not_expr()
+            v = _truthy(v) and _truthy(r)
+        }
+        return v
+    }
+
+    define not_expr(self) -> Any {
+        if self.peek() == "not" {
+            self.pos = self.pos + 1
+            v := self.not_expr()
+            return not _truthy(v)
+        }
+        return self.compare()
+    }
+
+    define compare(self) -> Any {
+        v := self.sum()
+        op := self.peek()
+        if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" {
+            self.pos = self.pos + 1
+            r := self.sum()
+            return _compare(v, op, r)
+        }
+        return v
+    }
+
+    define sum(self) -> Any {
+        v := self.product()
+        while self.peek() == "+" or self.peek() == "-" {
+            op := self.peek()
+            self.pos = self.pos + 1
+            r := self.product()
+            v = _arith(v, op, r)
+        }
+        return v
+    }
+
+    define product(self) -> Any {
+        v := self.unary()
+        while self.peek() == "*" or self.peek() == "/" or self.peek() == "%" {
+            op := self.peek()
+            self.pos = self.pos + 1
+            r := self.unary()
+            v = _arith(v, op, r)
+        }
+        return v
+    }
+
+    define unary(self) -> Any {
+        if self.peek() == "-" {
+            self.pos = self.pos + 1
+            v := self.unary()
+            return _arith(0, "-", v)
+        }
+        return self.postfix()
+    }
+
+    define args(self) -> List {
+        out := []
+        self.take("(")
+        if self.peek() == ")" {
+            self.pos = self.pos + 1
+            return out
+        }
+        while true {
+            out.append(self.or_expr())
+            if self.peek() == "," {
+                self.pos = self.pos + 1
+            } else {
+                self.take(")")
+                return out
+            }
+        }
+        return out
+    }
+
+    define postfix(self) -> Any {
+        v := self.primary()
+        while self.peek() == "." {
+            self.pos = self.pos + 1
+            t: List = self.toks[self.pos]
+            name: String = t[1]
+            self.pos = self.pos + 1
+            if self.peek() == "(" {
+                v = call_method(v, name, self.args())
+            } else {
+                v = _member(v, name)
+            }
+        }
+        return v
+    }
+
+    define primary(self) -> Any {
+        if self.pos >= self.toks.length() { _tfail("'" + self.src + "' ends too soon") }
+        t: List = self.toks[self.pos]
+        kind: String = t[0]
+        value: String = t[1]
+        self.pos = self.pos + 1
+        if kind == "str" { return value }
+        if kind == "num" {
+            if value.contains(".") { return Double(value) }
+            return Int(value)
+        }
+        if kind == "op" {
+            if value == "(" {
+                v := self.or_expr()
+                self.take(")")
+                return v
+            }
+            _tfail("unexpected '" + value + "' in '" + self.src + "'")
+        }
+        if value == "true" { return true }
+        if value == "false" { return false }
+        if value == "null" { return null }
+        if self.peek() == "(" {
+            return call_method(self.ctx.comp, value, self.args())
+        }
+        return self.ctx.lookup(value)
+    }
+}
+
+define _member(v: Any, name: String) -> Any {
+    if v == null { return null }
+    if v is Map {
+        m: Map = v
+        if m.has(name) { return m[name] }
+        if name == "length" { return m.keys().length() }
+        return null
+    }
+    if v is List {
+        l: List = v
+        if name == "length" { return l.length() }
+        _tfail("a List has no '" + name + "'")
+    }
+    if v is String {
+        s: String = v
+        if name == "length" { return s.length() }
+        if name == "upper" { return s.upper() }
+        if name == "lower" { return s.lower() }
+        _tfail("a String has no '" + name + "'")
+    }
+    if has_field(v, name) { return get_field(v, name) }
+    if has_method(v, name) { return call_method(v, name, []) }
+    _tfail("'" + name + "' isn't a field of " + type_name(v))
+    return null
+}
+
+define _truthy(v: Any) -> Bool {
+    if v == null { return false }
+    if v is Bool {
+        b: Bool = v
+        return b
+    }
+    if v is Int {
+        i: Int = v
+        return i != 0
+    }
+    if v is Double {
+        d: Double = v
+        return d != 0.0
+    }
+    if v is String {
+        s: String = v
+        return s != ""
+    }
+    if v is List {
+        l: List = v
+        return l.length() > 0
+    }
+    if v is Map {
+        m: Map = v
+        return m.keys().length() > 0
+    }
+    return true
+}
+
+define _is_number(v: Any) -> Bool {
+    return v is Int or v is Double
+}
+
+define _as_double(v: Any) -> Double {
+    if v is Int {
+        i: Int = v
+        return Double(i)
+    }
+    d: Double = v
+    return d
+}
+
+define _arith(a: Any, op: String, b: Any) -> Any {
+    if op == "+" and (a is String or b is String) { return _text(a) + _text(b) }
+    if not (_is_number(a) and _is_number(b)) { _tfail("can't " + op + " " + _text(a) + " and " + _text(b)) }
+    if a is Int and b is Int and op != "/" {
+        x: Int = a
+        y: Int = b
+        if op == "+" { return x + y }
+        if op == "-" { return x - y }
+        if op == "*" { return x * y }
+        return x % y
+    }
+    x := _as_double(a)
+    y := _as_double(b)
+    if op == "+" { return x + y }
+    if op == "-" { return x - y }
+    if op == "*" { return x * y }
+    if op == "/" { return x / y }
+    return x - y * Double(Int(x / y))
+}
+
+define _equal(a: Any, b: Any) -> Bool {
+    if a == null or b == null { return a == null and b == null }
+    if _is_number(a) and _is_number(b) { return _as_double(a) == _as_double(b) }
+    if a is String and b is String {
+        x: String = a
+        y: String = b
+        return x == y
+    }
+    if a is Bool and b is Bool {
+        p: Bool = a
+        q: Bool = b
+        return p == q
+    }
+    return a == b
+}
+
+define _compare(a: Any, op: String, b: Any) -> Bool {
+    if op == "==" { return _equal(a, b) }
+    if op == "!=" { return not _equal(a, b) }
+    if _is_number(a) and _is_number(b) {
+        x := _as_double(a)
+        y := _as_double(b)
+        if op == "<" { return x < y }
+        if op == ">" { return x > y }
+        if op == "<=" { return x <= y }
+        return x >= y
+    }
+    if a is String and b is String {
+        x: String = a
+        y: String = b
+        if op == "<" { return x < y }
+        if op == ">" { return x > y }
+        if op == "<=" { return x <= y }
+        return x >= y
+    }
+    _tfail("can't compare " + _text(a) + " " + op + " " + _text(b))
+    return false
+}
+
+// ===== templates: rendering =====
+
+// `text` with every {{ expr }} replaced (escaped).
+define _interpolate(text: String, ctx: _Ctx) -> String {
+    if not text.contains("{{") { return text }
+    out := ""
+    rest := text
+    while true {
+        at := rest.find("{{")
+        if at < 0 { break }
+        close := rest.find("}}")
+        if close < at { _tfail("'{{' without '}}' in '" + text + "'") }
+        out = out + rest.substring(0, at) + _text(ctx.eval(rest.substring(at + 2, close).trim()))
+        rest = rest.substring(close + 2, rest.length())
+    }
+    return out + rest
+}
+
+// A handler for an event: [component, method, args, pass_value] or
+// [component, "=field"] for model=.
+define _handler_for(spec: String, ctx: _Ctx) -> List {
+    src := spec.trim()
+    paren := src.find("(")
+    if paren < 0 { return [ctx.comp, src, [], true] }
+    name := src.substring(0, paren).trim()
+    e := _Eval(_etokens(src.substring(paren, src.length())), ctx, src)
+    args := e.args()
+    return [ctx.comp, name, args, false]
+}
+
+define _register(ctx: _Ctx, h: List) -> String {
+    root := ctx.root
+    root._next = root._next + 1
+    id := "h" + String(root._next)
+    root._handlers[id] = h
+    return id
+}
+
+_events := {"click": "q-click", "submit": "q-submit", "input": "q-input", "change": "q-change", "enter": "q-enter"}
+
+define _render_tag(node: _TNode, ctx: _Ctx) -> String {
+    out := "<" + node.text
+    attrs := ""
+    events := {}                    // q-attribute → [handler ids]
+    is_checkbox := false
+    for a in node.attrs {
+        at: List = a
+        n: String = at[0]
+        if n == "type" and String(at[1]) == "checkbox" { is_checkbox = true }
+    }
+    for a in node.attrs {
+        at: List = a
+        name: String = at[0]
+        value: String = at[1]
+        has_value: Bool = at[2]
+        if name.startswith("@") {
+            ev := name.substring(1, name.length())
+            if not _events.has(ev) { _tfail("unknown event @" + ev + " (use @click, @submit, @input, @change or @enter)") }
+            q: String = _events[ev]
+            if not events.has(q) { events[q] = [] }
+            ids: List = events[q]
+            ids.append(_register(ctx, _handler_for(value, ctx)))
+        } elif name == "model" {
+            current := ctx.lookup(value)
+            q := is_checkbox ? "q-change" : (node.text == "select" ? "q-change" : "q-input")
+            if not events.has(q) { events[q] = [] }
+            ids: List = events[q]
+            ids.append(_register(ctx, [ctx.comp, "=" + value]))
+            if is_checkbox {
+                if _truthy(current) { attrs = attrs + " checked" }
+            } elif node.text == "select" {
+                ctx.select_value = current
+                ctx.has_select = true
+            } elif node.text != "textarea" {
+                attrs = attrs + " value=\"" + web.escape(_text(current)) + "\""
+            }
+        } elif name.startswith(":") {
+            attr := name.substring(1, name.length())
+            v := ctx.eval(value)
+            if v is Bool {
+                b: Bool = v
+                if b { attrs = attrs + " " + attr }
+            } elif v != null {
+                attrs = attrs + " " + attr + "=\"" + web.escape(_text(v)) + "\""
+            }
+        } elif has_value {
+            attrs = attrs + " " + name + "=\"" + web.escape(_interpolate(value, ctx)) + "\""
+        } else {
+            attrs = attrs + " " + name
+        }
+    }
+    if node.text == "option" and ctx.has_select {
+        for a in node.attrs {
+            at: List = a
+            name: String = at[0]
+            if name == "value" and _equal(_interpolate(String(at[1]), ctx), _text(ctx.select_value)) {
+                attrs = attrs + " selected"
+            }
+        }
+    }
+    for q in events.keys() {
+        qn: String = q
+        ids: List = events[qn]
+        joined := ""
+        for id in ids { joined = joined == "" ? String(id) : joined + " " + String(id) }
+        attrs = attrs + " " + qn + "=\"" + joined + "\""
+    }
+    return out + attrs + (node.closed ? " />" : ">")
+}
+
+define _render_comp(node: _TNode, ctx: _Ctx) -> String {
+    root := ctx.root
+    name := node.text
+    key := ""
+    for a in node.attrs {
+        at: List = a
+        an: String = at[0]
+        if an == "key" { key = _interpolate(String(at[1]), ctx) }
+        if an == ":key" { key = _text(ctx.eval(String(at[1]))) }
+    }
+    if key == "" {
+        n := ctx.counts.has(name) ? Int(ctx.counts[name]) : 0
+        ctx.counts[name] = n + 1
+        key = ctx.key + "/" + name + "#" + String(n)
+    } else {
+        key = ctx.key + "/" + name + "=" + key
+    }
+    fresh := false
+    if not root._children.has(key) {
+        made := new_struct(name)
+        if made == null { _tfail("<" + name + "> isn't a struct of this app") }
+        if not has_field(made, "_root") { _tfail("<" + name + "> isn't a live.Component") }
+        root._children[key] = made
+        fresh = true
+    }
+    root._seen[key] = true
+    child: Component = root._children[key]
+    child._root = root
+    child._parent = ctx.comp
+    if child._listeners == null { child._listeners = {} }
+    for a in node.attrs {
+        at: List = a
+        an: String = at[0]
+        value: String = at[1]
+        if an == "key" or an == ":key" { continue }
+        if an.startswith("@") {
+            child._listeners[an.substring(1, an.length())] = _handler_for(value, ctx)
+        } elif an.startswith(":") {
+            _set_prop(child, an.substring(1, an.length()), ctx.eval(value))
+        } else {
+            _set_prop(child, an, _interpolate(value, ctx))
+        }
+    }
+    if fresh { child._start() }
+    inner := _Ctx(root, child, key)
+    inner.slot = node.children
+    inner.slot_ctx = ctx
+    return _render_nodes(_parse_template(_template_of(child)), inner)
+}
+
+// Set field `name` of `obj` to `value`, converting text to the field's
+// declared type (a prop `count="3"`, a model input's text).
+define _set_prop(obj: Any, name: String, value: Any) -> void {
+    if not has_field(obj, name) { return }           // class=, id= ... on a component: ignored
+    kind := field_type(obj, name)
+    v := value
+    if value is String {
+        s: String = value
+        if kind == "Int" {
+            v = s.trim() == "" ? 0 : Int(s.trim())
+        } elif kind == "Double" {
+            v = s.trim() == "" ? 0.0 : Double(s.trim())
+        } elif kind == "Bool" {
+            v = s == "true" or s == "on" or s == "1"
+        }
+    } elif kind == "String" and value != null {
+        v = _text(value)
+    }
+    set_field(obj, name, v)
+}
+
+define _render_nodes(nodes: List, ctx: _Ctx) -> String {
+    out := ""
+    for n in nodes {
+        node: _TNode = n
+        k := node.kind
+        if k == "text" {
+            out = out + node.text
+        } elif k == "expr" {
+            out = out + web.escape(_text(ctx.eval(node.text)))
+        } elif k == "raw" {
+            out = out + _text(ctx.eval(node.text))
+        } elif k == "if" {
+            done := false
+            for b in node.branches {
+                br: List = b
+                if not done and _truthy(ctx.eval(String(br[0]))) {
+                    out = out + _render_nodes(br[1], ctx)
+                    done = true
+                }
+            }
+            if not done { out = out + _render_nodes(node.otherwise, ctx) }
+        } elif k == "for" {
+            items := ctx.eval(node.text)
+            count := 0
+            if items is Map {
+                m: Map = items
+                for key in m.keys() {
+                    scope := {}
+                    scope[node.var1] = key
+                    if node.var2 != "" { scope[node.var2] = m[String(key)] }
+                    ctx.scopes.append(scope)
+                    out = out + _render_nodes(node.children, ctx)
+                    ctx.scopes.pop()
+                    count = count + 1
+                }
+            } elif items != null {
+                l: List = items
+                i := 0
+                for it in l {
+                    scope := {}
+                    if node.var2 != "" {
+                        scope[node.var1] = i
+                        scope[node.var2] = it
+                    } else {
+                        scope[node.var1] = it
+                    }
+                    ctx.scopes.append(scope)
+                    out = out + _render_nodes(node.children, ctx)
+                    ctx.scopes.pop()
+                    i = i + 1
+                }
+                count = i
+            }
+            if count == 0 { out = out + _render_nodes(node.otherwise, ctx) }
+        } elif k == "tag" {
+            out = out + _render_tag(node, ctx)
+        } elif k == "comp" {
+            out = out + _render_comp(node, ctx)
+        } elif k == "slot" {
+            if ctx.slot_ctx != null { out = out + _render_nodes(ctx.slot, ctx.slot_ctx) }
+        }
+    }
+    return out
+}
+
+_tpl_files := {}
+
+define _snake(name: String) -> String {
+    out := ""
+    n := web.byte_length(name)
+    i := 0
+    while i < n {
+        c := web.byte_slice(name, i, 1)
+        if _is_upper(c) {
+            if i > 0 { out = out + "_" }
+            out = out + c.lower()
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// The component's template: template(), or its .html file (re-read when it changes).
+define _template_of(comp: Component) -> String {
+    own := comp.template()
+    if own != "" { return own }
+    tname := type_name(comp)
+    src := source_file(comp)
+    dir := fs.dirname(src)
+    candidates := [fs.join(dir, _snake(tname) + ".html")]
+    base := fs.basename(src)
+    dot := base.find(".")
+    if dot > 0 { candidates.append(fs.join(dir, base.substring(0, dot) + ".html")) }
+    for c in candidates {
+        path: String = c
+        if fs.is_file(path) {
+            stamp := String(fs.mtime(path)) + ":" + String(fs.size(path))
+            if _tpl_files.has(path) {
+                entry: List = _tpl_files[path]
+                if String(entry[0]) == stamp {
+                    text: String = entry[1]
+                    return text
+                }
+            }
+            text := fs.read_text(path)
+            _tpl_files[path] = [stamp, text]
+            return text
+        }
+    }
+    _tfail("no template for " + tname + ": add " + String(candidates[0]) + ", or define template(self) -> String")
+    return ""
+}
+
+// Render a root component (a page): its handlers and child components are
+// numbered afresh; children not shown any more are dropped.
+define _render_root(comp: Component) -> String {
+    if comp._handlers == null { comp._handlers = {} }
+    if comp._children == null { comp._children = {} }
+    comp._root = comp
+    comp._handlers = {}
+    comp._seen = {}
+    comp._next = 0
+    out := _render_nodes(_parse_template(_template_of(comp)), _Ctx(comp, comp, ""))
+    kept := {}
+    for k in comp._children.keys() {
+        key: String = k
+        if comp._seen.has(key) { kept[key] = comp._children[key] }
+    }
+    comp._children = kept
+    return out
+}
+
+define _run_handler(h: List, value: Any, pass_value: Bool) -> void {
+    target := h[0]
+    method: String = h[1]
+    if method.startswith("=") {
+        _set_prop(target, method.substring(1, method.length()), value)
+        return
+    }
+    args: List = h[2]
+    explicit: Bool = h[3]
+    if explicit and pass_value {
+        call_method(target, method, [value])
+    } else {
+        call_method(target, method, args)
+    }
+}
+
+// An event from the page: `h3` (or several, space-separated) → its handler.
+define _dispatch(root: Component, event: String, data: Map) -> void {
+    if root._handlers == null { return }
+    for part in event.split(" ") {
+        id: String = part
+        if not root._handlers.has(id) { continue }
+        h: List = root._handlers[id]
+        value: Any = null
+        has := false
+        method: String = h[1]
+        if data.has("value") {
+            value = data["value"]
+            has = true
+        } elif not method.startswith("=") and data.keys().length() > 0 {
+            value = data                       // a form's fields
+            has = true
+        }
+        _run_handler(h, value, has)
     }
 }
 
@@ -686,34 +1806,16 @@ struct Table : Widget {
 // ===== pages =====
 
 ---
-A page — subclass it. Keep the page's state in fields; set it up in
-`on_load()` (runs once, when someone opens the page: read
-`self.param("id")`, load from a database or an API); return what to show
-from `build()`. After every event the page is built again.
+A page: a Component the router serves (`router.add("/todos", TodoPage)`).
+Write its HTML in a template (`todo_page.html` next to the .qk file), or
+build it from widgets by overriding `build()`:
 
-    struct TodoPage : live.Page {
-        items: List
-        draft: String
-
-        define on_load(self) -> void {
-            self.items = []
-            self.draft = ""
-        }
-
-        define build(self) -> live.Widget {
-            return live.Column([
-                live.TextInput(self.draft, placeholder="New item", on_submit=fn(text) {
-                    self.items.append(text)
-                    self.draft = ""
-                }),
-                live.ListView(self.items),
-            ])
-        }
+    define build(self) -> live.Widget {
+        return live.Column([
+            live.Label("Count: " + String(self.count)),
+            live.Button("+1", on_click=fn() { self.count = self.count + 1 }),
+        ])
     }
-
-Serve pages with a `live.Router` (`router.add("/todos", TodoPage)`).
-`title()` sets the page title; `self.go(path)` (in a handler) sends the
-browser to another page.
 ---
 struct Page : Component {
     _widgets: Map
@@ -723,39 +1825,22 @@ struct Page : Component {
         self._widgets = {}
     }
 
-    --- Set up the page's state (override). Runs once per visitor, before the first build. ---
-    define on_load(self) -> void {
-    }
-
-    --- What the page shows (override). ---
+    --- What the page shows, built from widgets (override) — or leave it, and write a template. ---
     define build(self) -> Widget {
         return null
     }
 
-    --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
-    define param(self, name: String) -> String {
-        if self.request == null or not self.request.params.has(name) { return "" }
-        return _text(self.request.params[name])
-    }
-
-    --- A `?name=value` of the page's URL; "" if none. ---
-    define query(self, name: String) -> String {
-        if self.request == null or not self.request.query.has(name) { return "" }
-        return _text(self.request.query[name])
-    }
-
-    define _start(self) -> void {
-        self.on_load()
-    }
-
     define render(self) -> String {
+        root := self.build()
+        if root == null { return _render_root(self) }
         b := _Build()
-        out := b.render(self.build())
+        out := b.render(root)
         self._widgets = b.widgets
         return out
     }
 
     define _widget(self, text: String) -> Widget {
+        if self._widgets == null { return null }
         i := 1
         while self._widgets.has("w" + String(i)) {
             w: Widget = self._widgets["w" + String(i)]
@@ -767,9 +1852,12 @@ struct Page : Component {
 
     define handle(self, event: String, data: Map) -> void {
         at := event.find(":")
-        if at < 0 { return }
+        if at < 0 {
+            _dispatch(self, event, data)
+            return
+        }
         id := event.substring(0, at)
-        if not self._widgets.has(id) { return }
+        if self._widgets == null or not self._widgets.has(id) { return }
         w: Widget = self._widgets[id]
         w._event(event.substring(at + 1, event.length()), data)
     }
@@ -969,7 +2057,8 @@ _client_js := """(function () {
 // [pattern Route, factory] per live page, for navigation without a reload.
 _pages := []
 _installed := []
-_settings := {"head": "", "layout": ""}
+_settings := {"head": "", "layout": "", "layout_file": ""}
+_layout_cache := {}
 
 _default_layout := """<!doctype html>
 <html lang="en">
@@ -986,21 +2075,23 @@ _default_layout := """<!doctype html>
 </html>"""
 
 ---
-Page settings: `head` — HTML added to every page's <head> (stylesheets,
-meta tags); `layout` — a whole page template of your own, with
-`{{ title }}`, `{{ head | raw }}`, `{{ body | raw }}` and a
-`<script src="/_live/live.js" defer></script>`.
+Page settings: `layout_file` — the base page every page is shown in (an
+HTML file with `<slot />` where the page goes, and `{{ title }}`); by
+default `index.html` in the app's folder when it has a `<slot />`.
+`head` — HTML added to every page's <head>. `layout` — a page template
+string (web's template syntax) with `{{ title }}`, `{{ head | raw }}` and
+`{{ body | raw }}`.
 ---
-define configure(head: String = "", layout: String = "") -> void {
+define configure(head: String = "", layout: String = "", layout_file: String = "") -> void {
     _settings["head"] = head
     _settings["layout"] = layout
+    _settings["layout_file"] = layout_file
 }
 
 ---
 Serve a live page at `path` (":params" allowed, as in web routes):
 `factory(req)` makes the page's component — one per visitor, kept while
-they use it. Links with `q-link` between live pages switch without a
-reload, and Back / Forward work.
+they use it. (A `live.Router` does this for you: `router.add(path, Page)`.)
 ---
 define page(app: web.App, path: String, factory: Callable) -> void {
     _install(app)
@@ -1024,10 +2115,50 @@ define _make(factory: Callable, req: web.Request) -> Component {
 
 define _page_html(comp: Component) -> String {
     t := comp.title()
+    head: String = _settings["head"]
+    body := comp._root_html()
+    base := _layout_source()
+    if base != "" {
+        page := base.replace("{{ title }}", web.escape(t)).replace("{{title}}", web.escape(t))
+        for tag in ["<slot />", "<slot/>", "<slot></slot>"] {
+            slot_tag: String = tag
+            page = page.replace(slot_tag, body)
+        }
+        script := "<script src=\"/_live/live.js\" defer></script>"
+        extra := head + (page.contains("/_live/live.js") ? "" : script)
+        if page.contains("</head>") {
+            page = page.replace("</head>", extra + "</head>")
+        } else {
+            page = extra + page
+        }
+        return page
+    }
     custom: String = _settings["layout"]
     layout := custom != "" ? custom : _default_layout
-    head: String = _settings["head"]
-    return html(layout, {"title": t, "head": head, "body": comp._root_html()})
+    return html(layout, {"title": t, "head": head, "body": body})
+}
+
+// The base page's text ("" for none), re-read when the file changes.
+define _layout_source() -> String {
+    path: String = _settings["layout_file"]
+    explicit := path != ""
+    if not explicit { path = "index.html" }
+    if not fs.is_file(path) {
+        if explicit { throw web.HttpError(500, "live: layout file not found: " + path) }
+        return ""
+    }
+    stamp := String(fs.mtime(path)) + ":" + String(fs.size(path))
+    if _layout_cache.has(path) {
+        entry: List = _layout_cache[path]
+        if String(entry[0]) == stamp {
+            text: String = entry[1]
+            return text
+        }
+    }
+    text := fs.read_text(path)
+    if not explicit and not text.contains("<slot") { text = "" }
+    _layout_cache[path] = [stamp, text]
+    return text
 }
 
 define _install(app: web.App) -> void {
@@ -1128,6 +2259,14 @@ struct Router : web.Router {
 
 // ===== testing =====
 
+// The value of `attr` in a start tag's text (what TestSession sends).
+define _attr_of(tag: String, attr: String, what: String) -> String {
+    at := tag.find(attr + "=\"")
+    if at < 0 { throw ValueError("live.TestSession: '" + what + "' has no " + attr.replace("q-", "@") + " handler") }
+    rest := tag.substring(at + attr.length() + 2, tag.length())
+    return rest.substring(0, rest.find("\""))
+}
+
 ---
 Drive live pages in tests, without a browser:
 
@@ -1184,37 +2323,90 @@ struct TestSession {
         return self
     }
 
-    --- Click the button (or other widget) labelled `text` on a live.Page. ---
+    --- Click the button (or other element) showing `text`. ---
     define click(self, text: String) -> TestSession {
-        return self._fire(text, "click", "")
+        w := self._widget_for(text)
+        if w != null { return self.send(w._on("click"), {"value": ""}) }
+        return self.send(self._event_at(">" + text + "<", "q-click"), {})
     }
 
     --- Type `value` into the text field whose placeholder is `placeholder`. ---
     define type(self, placeholder: String, value: String) -> TestSession {
-        return self._fire(placeholder, "change", value)
+        w := self._widget_for(placeholder)
+        if w != null { return self.send(w._on("change"), {"value": value}) }
+        return self.send(self._event_at("placeholder=\"" + web.escape(placeholder) + "\"", "q-input"), {"value": value})
     }
 
     --- Type `value` into the text field with `placeholder` and press Enter. ---
     define submit(self, placeholder: String, value: String) -> TestSession {
-        return self._fire(placeholder, "submit", value)
+        w := self._widget_for(placeholder)
+        if w != null { return self.send(w._on("submit"), {"value": value}) }
+        marker := "placeholder=\"" + web.escape(placeholder) + "\""
+        if self._tag_at(marker).contains("q-input=") { self.send(self._event_at(marker, "q-input"), {"value": value}) }
+        return self.send(self._event_at(marker, "q-enter"), {"value": value})
     }
 
     --- Tick (`on` true) or untick the checkbox labelled `text`. ---
     define check(self, text: String, on: Bool = true) -> TestSession {
-        return self._fire(text, "change", on ? "true" : "false")
+        w := self._widget_for(text)
+        value := on ? "true" : "false"
+        if w != null { return self.send(w._on("change"), {"value": value}) }
+        return self.send(self._event_at(text, "q-change"), {"value": value})
     }
 
-    --- Pick option `index` of the dropdown whose first option is `first`. ---
-    define choose(self, first: String, index: Int) -> TestSession {
-        return self._fire(first, "change", String(index))
+    ---
+    Pick an option: in a template's <select>, the option showing `option`
+    (`index` unused); for a live.Dropdown, the one whose first option is
+    `option`, at `index`.
+    ---
+    define choose(self, option: String, index: Int = 0) -> TestSession {
+        w := self._widget_for(option)
+        if w != null { return self.send(w._on("change"), {"value": String(index)}) }
+        at := self.html.find(">" + web.escape(option) + "</option>")
+        if at < 0 { throw ValueError("live.TestSession: no option '" + option + "' on the page") }
+        before := self.html.substring(0, at)
+        opt := before.split("<option")
+        attrs: String = opt[opt.length() - 1]
+        value := option
+        v := attrs.find("value=\"")
+        if v >= 0 {
+            rest := attrs.substring(v + 7, attrs.length())
+            value = rest.substring(0, rest.find("\""))
+        }
+        sel := before.split("<select")
+        tag: String = sel[sel.length() - 1]
+        return self.send(_attr_of(tag, "q-change", option), {"value": value})
     }
 
-    define _fire(self, label: String, kind: String, value: String) -> TestSession {
+    --- Submit the form holding the field with `placeholder` (or name), with `fields`. ---
+    define submit_form(self, field: String, fields: Map) -> TestSession {
+        at := self.html.find("placeholder=\"" + web.escape(field) + "\"")
+        if at < 0 { at = self.html.find("name=\"" + web.escape(field) + "\"") }
+        if at < 0 { throw ValueError("live.TestSession: no field '" + field + "' on the page") }
+        forms := self.html.substring(0, at).split("<form")
+        tag: String = forms[forms.length() - 1]
+        return self.send(_attr_of(tag, "q-submit", field), fields)
+    }
+
+    define _widget_for(self, label: String) -> Widget {
         comp := _find(self.id)
         if comp == null { throw ValueError("live.TestSession: no page open") }
-        w := comp._widget(label)
-        if w == null { throw ValueError("live.TestSession: nothing labelled '" + label + "' on the page") }
-        return self.send(w._on(kind), {"value": value})
+        return comp._widget(label)
+    }
+
+    // The start tag holding the first `marker` in the page.
+    define _tag_at(self, marker: String) -> String {
+        at := self.html.find(marker)
+        if at < 0 { throw ValueError("live.TestSession: nothing showing '" + marker + "' on the page") }
+        pieces := self.html.substring(0, at).split("<")
+        last: String = pieces[pieces.length() - 1]
+        rest := self.html.substring(at - last.length(), self.html.length())
+        close := rest.find(">")
+        return close < 0 ? rest : rest.substring(0, close)
+    }
+
+    define _event_at(self, marker: String, attr: String) -> String {
+        return _attr_of(self._tag_at(marker), attr, marker)
     }
 
     --- Follow a `q-link` to `path`. ---

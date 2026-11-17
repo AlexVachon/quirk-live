@@ -1,12 +1,25 @@
 # live
 
-Interactive web pages written only in Quirk. A page is a **struct**: its
-state in fields, `on_load()` to set it up, and `build()` returning the
-widgets to show. A click or a keystroke runs the widget's handler on the
-server, the page is built again, and the browser updates in place — no
-reload, and **no JavaScript or HTML to write** (a small fixed script that
-ships with this package does the browser's part). It runs inside a
-[`web`](https://github.com/AlexVachon/quirk-web) app.
+Interactive web pages written in Quirk and HTML — like Vue, but the
+components run on the server. A component is a **struct** (its state in
+fields, its actions in methods) with an **HTML template** next to it. A click
+or a keystroke calls a method on the server, the page is rendered again, and
+the browser updates in place — no reload, and **no JavaScript to write** (a
+small fixed script that ships with this package does the browser's part).
+It runs inside a [`web`](https://github.com/AlexVachon/quirk-web) app.
+
+```
+myapp/
+├── index.html            the base page: <slot /> is where each page goes
+├── router.qk             which page is at which path
+├── main.qk               the server
+└── src/
+    ├── counter.qk        struct CounterPage, struct PlusButton
+    ├── counter_page.html CounterPage's template
+    └── plus_button.html  PlusButton's template
+```
+
+`src/counter.qk`:
 
 ```quirk
 use live
@@ -14,50 +27,67 @@ use live
 struct CounterPage : live.Page {
     count: Int
 
-    define on_load(self) -> void {               // once, when someone opens the page
+    define on_load(self) -> void {         // once, when someone opens the page
         self.count = 0
     }
 
-    define build(self) -> live.Widget {          // what the page shows
-        return live.Column([
-            live.Heading("Counter"),
-            live.Label("Count: " + String(self.count)),
-            live.Row([
-                live.Button("−1", on_click=fn() { self.count = self.count - 1 }),
-                PlusButton(self),
-            ]),
-        ])
+    define add(self, n: Int) -> void {
+        self.count = self.count + n
     }
 }
 
-// A component of your own: a Button with its own on_click.
-struct PlusButton : live.Button {
+struct PlusButton : live.Component {
     page: CounterPage
+    step: Int
 
-    define __init(self, page: CounterPage) -> void {
-        super().__init("+1")
-        self.page = page
-    }
-
-    define on_click(self) -> void {
-        self.page.count = self.page.count + 1
+    define press(self) -> void {
+        self.page.add(self.step)
     }
 }
 ```
 
-The routes, in `router.qk`:
+`src/counter_page.html`:
+
+```html
+<h1>Count: {{ count }}</h1>
+<div class="buttons">
+  <button @click="add(-1)">−1</button>
+  <PlusButton :page="self" :step="1" />
+  <PlusButton :page="self" :step="10" />
+</div>
+{% if count >= 10 %}<p>That's a lot!</p>{% end %}
+```
+
+`src/plus_button.html`:
+
+```html
+<button class="plus" @click="press">+{{ step }}</button>
+```
+
+`router.qk`:
 
 ```quirk
 from live use { Router }
 from src.counter use { CounterPage }
-from src.todos use { TodoPage }
 
 router = Router()
 router.add("/", CounterPage)
-router.add("/todos", TodoPage)
 ```
 
-and the app, in `main.qk`:
+`index.html`:
+
+```html
+<!doctype html>
+<html>
+<head><title>{{ title }}</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <nav><a href="/" q-link>Counter</a></nav>
+  <main><slot /></main>
+</body>
+</html>
+```
+
+`main.qk`:
 
 ```quirk
 use web
@@ -65,95 +95,83 @@ from router use { router }
 
 define main() -> void {
     app := web.App()
+    app.use(web.static("public"))
     app.mount("/", router)
     app.listen(3000)
 }
 ```
 
-Try the demo — a counter, a todo list with live search, and navigation, laid
-out like this: `cd examples/app && quirk run main.qk`, then open
-http://localhost:3000.
+`quirk new --live myapp` makes such a project. The demo — a counter, a todo
+list with live search, navigation — is in `examples/app`:
+`cd examples/app && quirk run main.qk`, then open http://localhost:3000.
 
-## Pages
+## Components
 
-Subclass `live.Page` and override:
+A component is a struct that extends `live.Component`; a page extends
+`live.Page` (a component the router serves). Its template is the `.html`
+file named after the struct (`TodoRow` → `todo_row.html`) next to its `.qk`
+file — or the `.qk` file's own name (`counter.html`) — or the String its
+`template(self)` method returns. Template files are re-read when they change.
 
 | | |
 |---|---|
-| `on_load(self)` | set up the page's state — runs once per visitor, before the first build (load from a database or an API here) |
-| `build(self) -> live.Widget` | what the page shows; it's built again after every event |
-| `title(self) -> String` | the page title (updated with the page) |
+| `on_load(self)` | set up its state — runs once, before it's first shown (load from a database or an API here) |
+| your methods | called by the template's events (`@click="add(1)"`) |
+| `title(self) -> String` | a page's title |
+| `self.emit("name", value)` | tell the parent component (its `@name="method"`) |
+| `self.go("/path")` | after this event, show another page |
+| `self.param("id")` · `self.query("q")` | a page's `/users/:id` part · `?q=` value |
 
-In a page, `self.param("id")` reads a `:param` of its path
-(`router.add("/users/:id", UserPage)`), `self.query("q")` a `?q=` of its
-URL, `self.request` is the whole request, and `self.go("/path")` in a
-handler sends the browser to another page.
+## Templates
 
-Each visitor gets their own page object, kept on the server while they use
-it (`live.session_minutes(n)`, default 30 after the last event).
-
-## Widgets
-
-Named like the desktop [`ui`](https://github.com/AlexVachon/quirk-ui) widgets.
-
-| Widget | Events |
+| | |
 |---|---|
-| `Label(text)` · `Heading(text, level=1)` | |
-| `Button(text, on_click=fn() {...})` | `on_click()` |
-| `Link(text, href, external=false)` | switches live pages without a reload; Back / Forward work |
-| `TextInput(text="", placeholder="", on_change=, on_submit=, password=false)` | `on_change(text)` while typing, `on_submit(text)` on Enter |
-| `TextArea(text="", rows=4, on_change=, placeholder="")` | `on_change(text)` |
-| `Checkbox(text, checked=false, on_change=)` | `on_change(checked)` |
-| `Dropdown(options, selected=0, on_change=)` | `on_change(index, option)` |
-| `Slider(min=0, max=100, value=50, on_change=, step=1)` | `on_change(value)` |
-| `ListView(items, on_select=)` — items are text or widgets | `on_select(index, item)` |
-| `Table(columns, rows, on_select=)` — cells are text or widgets | `on_select(index, row)` |
-| `Image(src, alt="")` · `Spacer()` · `Html(source)` | |
-| `Column(children, spacing=8)` · `Row(children, spacing=8)` | |
+| `{{ count }}` | a field (or a method with no arguments), escaped |
+| `{{ item.text }}` · `{{ items.length }}` · `{{ total() }}` | fields of fields, Map keys, lengths, method calls |
+| `{{ html \| raw }}` | not escaped |
+| `{% if count >= 10 and not done %} … {% elif … %} … {% else %} … {% end %}` | `== != < > <= >=`, `and or not`, `+ - * / %` |
+| `{% for item in items %} … {% else %} … {% end %}` | `else`: the list is empty; `{% for i, item in items %}` with the index (Maps: key, value) |
+| `<button @click="save">` | calls `self.save()`; `@click="add(1)"` with arguments (evaluated when shown) |
+| `@submit="save"` (a form) | `save(fields)` — a Map of the form's fields |
+| `@input="search"` · `@change="pick"` · `@enter="send"` | `search(text)` while typing · on a change · on Enter |
+| `<input model="draft">` | the field shows `self.draft` and sets it as you type (checkboxes: a Bool; `<select model=…>` too) |
+| `:disabled="busy"` · `:href="link"` | an attribute from an expression (a Bool adds or leaves it out) |
+| `title="Hi {{ name }}"` | `{{ }}` works in attributes |
+| `<a href="/todos" q-link>` | go to another page without a reload (Back / Forward work) |
 
-Every event can be handled two ways: pass a function (`on_click=fn() {...}`),
-or subclass the widget and override the method (`define on_click(self)`).
-Handlers change the page's fields; the page is then built again from them.
-So show the page's state in its widgets: `TextInput(self.draft, ...)`, and
-`self.draft = ""` in `on_submit` clears the field.
+### Using components
 
-Text is always escaped, so user input can't inject HTML. `with_class("name")`
-and `with_style("css")` add a CSS class or inline style (they chain);
-`live.configure(head="<link rel=\"stylesheet\" href=\"/style.css\">")` adds
-to every page's `<head>`.
+A tag named like a struct is that component: `<PlusButton />`, or with
+content, `<Card title="…">…</Card>`.
 
-### Widgets of your own
+- **Props**: `text="Hi {{ name }}"` sets the child's `text` field (text,
+  converted to the field's type); `:count="n + 1"` sets it to a value
+  (Lists, structs, `self`…).
+- **Events**: `@remove="remove"` runs the parent's `remove(value)` when the
+  child calls `self.emit("remove", value)`.
+- **Slots**: a `<slot />` in the child's template shows what its tag enclosed
+  (rendered with the parent's fields).
+- **State**: each child keeps its own fields between renders (it's the same
+  object), and `on_load` runs once when it first appears. Children in a
+  `{% for %}` are matched by position; give them `:key="item.id"` when the
+  list's order changes.
 
-Subclass `live.Widget` and return what it's made of from `build()`:
+## The base page
 
-```quirk
-struct TodoRow : live.Widget {
-    page: TodoPage
-    index: Int
-    text: String
-
-    define __init(self, page: TodoPage, index: Int, text: String) -> void {
-        super().__init()
-        self.page = page
-        self.index = index
-        self.text = text
-    }
-
-    define build(self) -> live.Widget {
-        return live.Row([
-            live.Label(self.text),
-            live.Button("×", on_click=fn() { self.page.remove(self.index) }),
-        ])
-    }
-}
-```
+`index.html` in the app's folder (the folder you run it from), when it has a
+`<slot />`, is the page every page is shown in: `<slot />` is replaced by the
+page and `{{ title }}` by its title; the browser script is added for you.
+`live.configure(layout_file="views/base.html")` picks another file. Without
+one, pages get a plain HTML page (`live.configure(head="<link …>")` adds to
+its `<head>`).
 
 ## The router
 
-`live.Router` is a `web.Router`, so it can hold ordinary routes too
-(`router.get("/api/items", handler)`, middleware with `router.use`). Mount it
-at "/" — the browser script talks to `/_live/`. `router.add(path, Page)`
-takes the page struct itself; a new one is made for each visitor.
+`live.Router` is a `web.Router`: `router.add("/todos", TodoPage)` takes the
+page struct itself (a new one for each visitor, kept on the server while they
+use it — `live.session_minutes(n)`, default 30). It can hold ordinary routes
+too (`router.get("/api/items", handler)`). Mount it at "/" — the browser
+script talks to `/_live/`.
 
 ## Testing
 
@@ -163,85 +181,73 @@ takes the page struct itself; a new one is made for each visitor.
 define test_counter() -> void {
     s := live.TestSession(make_app())
     s.open("/")
-    s.click("+1")                          // the button labelled "+1"
+    s.click("+1")                        // the element showing "+1"
     test.assert_true(s.html.contains("Count: 1"))
     s.navigate("/todos")
-    s.submit("New item", "milk")           // type into the field with that placeholder, press Enter
-    s.type("Search", "mi")                 // type (on_change)
-    s.check("Show done", false)            // a Checkbox by its text
-    s.choose("low", 1)                     // a Dropdown by its first option
+    s.submit("New item", "milk")         // type into the field with that placeholder, press Enter
+    s.type("Search", "mi")               // @input / model=
+    s.check("Done only")                 // a checkbox, by its label
+    s.choose("high")                     // a <select>'s option
+    s.submit_form("text", {"text": "eggs"})
 }
 ```
 
 `html` is the page's current HTML, `title` its title, `location` its path.
 
-`tests/browser/` also checks the browser script itself, in a real DOM (Node
-+ jsdom): `cd tests/browser && npm install && node live_pages.mjs http://localhost:3000`
-while `examples/app` runs (and `live_dom.mjs` against `examples/demo.qk`).
+`tests/browser/` checks the browser script itself, in a real DOM (Node +
+jsdom): `cd tests/browser && npm install && node live_pages.mjs http://localhost:3000`
+while `examples/app` runs.
 
-## Templates (the HTML way)
+## Widgets (pages in Quirk only)
 
-If you'd rather write HTML, a page can be a `live.Component` with a
-template instead (or put template output in a page with
-`live.Html(live.html(template, data))`):
+A page can also be built from widgets instead of a template — override
+`build(self) -> live.Widget`:
 
 ```quirk
-struct Counter : live.Component {
-    count: Int
-
-    define __init(self) -> void {
-        super().__init()
-        self.count = 0
-    }
-
-    define render(self) -> String {
-        return live.html("""
-<p>{{ count }}</p>
-<button q-click="add" q-value="1">+1</button>""", {"count": self.count})
-    }
-
-    define handle(self, event: String, data: Map) -> void {
-        if event == "add" { self.count = self.count + Int(data["value"]) }
-    }
+define build(self) -> live.Widget {
+    return live.Column([
+        live.Heading("Counter"),
+        live.Label("Count: " + String(self.count)),
+        live.Button("+1", on_click=fn() { self.count = self.count + 1 }),
+    ])
 }
-
-live.page(app, "/", fn(req) { return Counter() })
 ```
 
-`live.html(template, data)` uses [web's template
-syntax](https://github.com/AlexVachon/quirk-web#templates), escaped. Events
-in templates:
+Label, Heading, Button, Link, TextInput, TextArea, Checkbox, Dropdown, Slider,
+ListView, Table, Image, Spacer, Html, Column and Row, named like the desktop
+[`ui`](https://github.com/AlexVachon/quirk-ui) widgets; handlers are callbacks
+(`on_click=fn() {...}`) or overridden methods (`struct PlusButton :
+live.Button { define on_click(self) ... }`); `with_class` / `with_style`
+style them; widgets of your own subclass `live.Widget` and return what
+they're made of from `build()`.
 
-| Attribute | Sends | `data` |
-|---|---|---|
-| `q-click="name"` | on click | `value` from `q-value="..."`, plus any `data-*` attributes |
-| `q-submit="name"` (on a form) | on submit | the form's fields by `name` |
-| `q-input="name"` | while typing (after a short pause) | `value` |
-| `q-change="name"` | on change | `value` (checkboxes: "true" / "false") |
-| `q-enter="name"` | on Enter | `value` |
-| `<a href="/x" q-link>` | navigates between live pages without a reload | |
+## Reflection
 
-`TestSession.send("add", {"value": "1"})` sends a template event in tests.
-`configure(layout=...)` replaces the page template (keep `{{ title }}`,
-`{{ head | raw }}`, `{{ body | raw }}` and
-`<script src="/_live/live.js" defer></script>`).
+What templates use, for your code too: `live.get_field(obj, "name")`,
+`set_field`, `has_field`, `field_names`, `field_type`, `call_method(obj,
+"name", [args])`, `has_method`, `method_names`, `type_name`, `new_struct("Name")`.
 
 ## How it works
 
-The page holds `<div q-root="ID">`. The script sends each event as JSON to
-`/_live/event`; the server finds the page by its ID (128 random bits), runs
-the handler, builds and renders the page, and answers with the new HTML,
-which the script morphs into the page — the field you're typing in keeps its
-focus and text, and unchanged elements stay as they are. Events are sent in
-order, and typing that hasn't been sent yet goes before a click. Links ask
-`/_live/nav` for the next page. Every interaction is a round trip, so live
-suits forms, dashboards, lists and admin pages; it's not for offline use or
-animations.
+The page holds `<div q-root="ID">`. Each `@click` / `model` in the rendered
+template gets a numbered handler; the script sends each event as JSON to
+`/_live/event`; the server finds the page by its ID (128 random bits), calls
+the method, renders the page again, and answers with the new HTML, which the
+script morphs into the page — the field you're typing in keeps its focus and
+text, and unchanged elements stay as they are. Events are sent in order, and
+typing that hasn't been sent yet goes before a click. Links ask `/_live/nav`
+for the next page. Every interaction is a round trip, so live suits forms,
+dashboards, lists and admin pages; it's not for offline use or animations.
+
+The 1.0 way still works: a `live.Component` overriding `render()` (HTML,
+often `live.html(template, data)`) and `handle(event, data)`, with
+`q-click="name"` / `q-submit` / `q-input` / `q-change` / `q-enter` attributes,
+served with `live.page(app, "/", fn(req) { return Counter() })`.
 
 ## Requirements
 
-Quirk 7.44.0 or newer (a page struct passed by name to `router.add`), and
-the `web` package (bundled with Quirk).
+Quirk 7.44.0 or newer (run-time reflection; a page struct passed by name to
+`router.add`), and the `web` package (bundled with Quirk).
 
 ## License
 

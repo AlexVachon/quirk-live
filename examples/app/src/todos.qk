@@ -1,5 +1,4 @@
 use live
-from src.nav use { nav }
 
 struct TodoPage : live.Page {
     items: List
@@ -13,31 +12,8 @@ struct TodoPage : live.Page {
         self.filter = ""
     }
 
-    define build(self) -> live.Widget {
-        rows := []
-        i := 0
-        for it in self.items {
-            text: String = it
-            if self.filter == "" or text.contains(self.filter) { rows.append(TodoRow(self, i, text)) }
-            i = i + 1
-        }
-        if rows.length() == 0 { rows.append("Nothing here") }
-        return live.Column([
-            nav(),
-            live.Heading("Todos"),
-            live.Row([
-                live.TextInput(self.draft, placeholder="Something to do",
-                               on_change=fn(text) { self.draft = text },
-                               on_submit=fn(text) { self.add(text) }),
-                live.Button("Add", on_click=fn() { self.add(self.draft) }),
-            ]),
-            live.TextInput(self.filter, placeholder="Search", on_change=fn(text) { self.filter = text }),
-            live.ListView(rows),
-        ])
-    }
-
-    define add(self, text: String) -> void {
-        t := text.trim()
+    define add(self) -> void {
+        t := self.draft.trim()
         if t != "" { self.items.append(t) }
         self.draft = ""
     }
@@ -52,28 +28,29 @@ struct TodoPage : live.Page {
         self.items = kept
     }
 
+    // The items matching the search, with their index in `items`.
+    define shown(self) -> List {
+        out := []
+        i := 0
+        for it in self.items {
+            text: String = it
+            if self.filter == "" or text.contains(self.filter) { out.append({"text": text, "index": i}) }
+            i = i + 1
+        }
+        return out
+    }
+
     define title(self) -> String {
         return "Todos (" + String(self.items.length()) + ")"
     }
 }
 
-// One line of the list: its text and a button to remove it.
-struct TodoRow : live.Widget {
-    page: TodoPage
-    index: Int
+// One line of the list; tells the page when its × is clicked.
+struct TodoRow : live.Component {
     text: String
+    index: Int
 
-    define __init(self, page: TodoPage, index: Int, text: String) -> void {
-        super().__init()
-        self.page = page
-        self.index = index
-        self.text = text
-    }
-
-    define build(self) -> live.Widget {
-        return live.Row([
-            live.Label(self.text),
-            live.Button("×", on_click=fn() { self.page.remove(self.index) }),
-        ])
+    define remove(self) -> void {
+        self.emit("remove", self.index)
     }
 }

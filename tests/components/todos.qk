@@ -1,0 +1,74 @@
+use live
+
+struct TodoPage : live.Page {
+    items: List
+    draft: String
+    filter: String
+    done_only: Bool
+    level: String
+
+    define on_load(self) -> void {
+        self.items = ["milk"]
+        self.draft = ""
+        self.filter = ""
+        self.done_only = false
+        self.level = "low"
+    }
+
+    define add(self, text: String) -> void {
+        t := text.trim()
+        if t != "" { self.items.append(t) }
+        self.draft = ""
+    }
+
+    define remove(self, index: Int) -> void {
+        kept := []
+        j := 0
+        for it in self.items {
+            if j != index { kept.append(it) }
+            j = j + 1
+        }
+        self.items = kept
+    }
+
+    define shown(self) -> List {
+        out := []
+        for it in self.items {
+            s: String = it
+            if self.filter == "" or s.contains(self.filter) { out.append(s) }
+        }
+        return out
+    }
+
+    define save(self, form: Map) -> void {
+        self.items.append(String(form["text"]) + "!")
+    }
+
+    define template(self) -> String {
+        return """
+<input model="draft" placeholder="New item" @enter="add">
+<button @click="add(draft)">Add</button>
+<input model="filter" placeholder="Search">
+<label><input type="checkbox" model="done_only"> done only</label>
+<select model="level"><option value="low">low</option><option value="high">high</option></select>
+<form @submit="save"><input name="text"></form>
+<ul>
+{% for i, item in shown %}<Card :title="item" :index="i" @remove="remove"><b>{{ item }}</b></Card>{% else %}<li>nothing</li>{% end %}
+</ul>
+<p>{{ items.length }} items, level {{ level }}{% if done_only %}, done only{% end %}</p>"""
+    }
+}
+
+// Slot content: what the <Card> tag encloses.
+struct Card : live.Component {
+    title: String
+    index: Int
+
+    define gone(self) -> void {
+        self.emit("remove", self.index)
+    }
+
+    define template(self) -> String {
+        return "<li title=\"{{ title }}\"><slot /> <button @click=\"gone\">×</button></li>"
+    }
+}

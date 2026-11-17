@@ -1,0 +1,44 @@
+use live
+
+struct CounterPage : live.Page {
+    count: Int
+    last: Int
+
+    define on_load(self) -> void {
+        self.count = 0
+        self.last = 0
+    }
+
+    define noted(self, clicks: Int) -> void {
+        self.last = clicks
+    }
+
+    define add(self, n: Int) -> void {
+        self.count = self.count + n
+    }
+
+    define reset(self) -> void {
+        self.count = 0
+    }
+
+    define title(self) -> String {
+        return "Counter " + String(self.count)
+    }
+}
+
+// A component with its own template file (plus_button.html) and state.
+struct PlusButton : live.Component {
+    page: CounterPage
+    clicks: Int
+    step: Int
+
+    define on_load(self) -> void {
+        self.clicks = 0
+    }
+
+    define press(self) -> void {
+        self.clicks = self.clicks + 1
+        self.page.add(self.step)
+        self.emit("pressed", self.clicks)
+    }
+}

@@ -1,4 +1,4 @@
-// Drive live.js in a real DOM (jsdom) against examples/app (live.Page widgets).
+// Drive live.js in a real DOM (jsdom) against examples/app (template components).
 // cd examples/app && quirk run main.qk      then: node live_pages.mjs http://localhost:3000
 import { JSDOM } from 'jsdom';
 const base = process.argv[2];
@@ -32,14 +32,14 @@ const type = (el, text) => { el.value = text; el.dispatchEvent(new w.Event('inpu
 check(count() === '0', 'counter starts at 0');
 const plus = button('+1');
 button('+1').click();
-check(await until(() => count() === '1'), 'the subclassed button (on_click override) adds 1');
+check(await until(() => count() === '1'), 'a <PlusButton /> component adds 1');
 for (let i = 0; i < 9; i++) button('+1').click();           // fast clicks: queued, none lost
 check(await until(() => count() === '10'), 'ten quick clicks: 10');
-check(await until(() => d().body.textContent.includes("That's a lot!")), 'a widget added by build()');
+check(await until(() => d().body.textContent.includes("That's a lot!")), 'an {% if %} block appears');
 check(button('+1') === plus, 'the button element is kept (morphed)');
 check(d().title === 'Counter (10)', 'title: ' + d().title);
 button('−1').click();
-check(await until(() => count() === '9' && !d().body.textContent.includes("That's a lot!")), 'callback button: 9');
+check(await until(() => count() === '9' && !d().body.textContent.includes("That's a lot!")), '@click="add(-1)": 9');
 
 [...d().querySelectorAll('a[q-link]')].find(a => a.getAttribute('href') === '/todos')
   .dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
@@ -70,7 +70,7 @@ check(await until(() => d().querySelectorAll('ul > li').length === 4), 'all four
 
 // A button inside a widget of your own.
 d().querySelector('ul > li button').click();
-check(await until(() => !d().querySelector('ul').textContent.includes('buy milk')), 'TodoRow × removes its item');
+check(await until(() => !d().querySelector('ul').textContent.includes('buy milk')), 'a TodoRow emits remove: the page removes the item');
 
 w.history.back();
 check(await until(() => !!d().querySelector('.count')), 'Back: the counter page again');
