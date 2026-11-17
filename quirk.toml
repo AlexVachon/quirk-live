@@ -1,0 +1,8 @@
+name          = "live"
+version       = "1.0.0"
+license       = "MIT"
+description   = "Interactive web pages in Quirk only: components with state, events and templates that run on the server and update the page live (no JavaScript to write); client-side navigation, TestSession."
+repository    = "github.com/AlexVachon/quirk-live"
+quirk-version = ">=7.43.0"
+
+[deps]

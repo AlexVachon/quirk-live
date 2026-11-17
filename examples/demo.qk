@@ -1,0 +1,115 @@
+// live demo: a counter, a todo list with live search, and navigation.
+// Run:  quirk run examples/demo.qk     then open http://localhost:3000
+use web
+use live
+use sys
+
+nav := "<nav><a href=\"/\" q-link>Counter</a> · <a href=\"/todos\" q-link>Todos</a> · <a href=\"/hello/world\" q-link>Hello</a></nav>"
+
+struct Counter : live.Component {
+    count: Int
+
+    define __init(self) -> void {
+        super().__init()
+        self.count = 0
+    }
+
+    define render(self) -> String {
+        return live.html(nav + """
+<h1>Counter</h1>
+<p id="count">{{ count }}</p>
+<button id="dec" q-click="add" q-value="-1">−1</button>
+<button id="inc" q-click="add" q-value="1">+1</button>
+<button id="reset" q-click="reset">reset</button>
+{% if big %}<p id="big">That's a lot!</p>{% end %}""", {"count": self.count, "big": self.count >= 10})
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        if event == "add" { self.count = self.count + Int(data["value"]) }
+        if event == "reset" { self.count = 0 }
+    }
+
+    define title(self) -> String {
+        return "Counter (" + String(self.count) + ")"
+    }
+}
+
+struct Todos : live.Component {
+    items: List
+    filter: String
+
+    define __init(self) -> void {
+        super().__init()
+        self.items = ["buy milk", "write docs"]
+        self.filter = ""
+    }
+
+    define render(self) -> String {
+        shown := []
+        i := 0
+        for it in self.items {
+            s: String = it
+            if self.filter == "" or s.contains(self.filter) { shown.append({"text": s, "i": i}) }
+            i = i + 1
+        }
+        return live.html(nav + """
+<h1>Todos</h1>
+<form id="add" q-submit="add"><input id="new" name="text" placeholder="Something to do"><button>Add</button></form>
+<input id="search" q-input="search" placeholder="Search" value="{{ filter }}">
+<ul id="list">{% for t in shown %}<li>{{ t.text }} <button q-click="remove" q-value="{{ t.i }}">×</button></li>{% else %}<li>Nothing here</li>{% end %}</ul>""",
+            {"shown": shown, "filter": self.filter})
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        if event == "add" {
+            text := String(data["text"]).trim()
+            if text != "" { self.items.append(text) }
+        } elif event == "search" {
+            self.filter = String(data["value"])
+        } elif event == "remove" {
+            i := Int(data["value"])
+            kept := []
+            j := 0
+            for it in self.items {
+                if j != i { kept.append(it) }
+                j = j + 1
+            }
+            self.items = kept
+        }
+    }
+
+    define title(self) -> String {
+        return "Todos"
+    }
+}
+
+struct Hello : live.Component {
+    name: String
+
+    define __init(self, name: String) -> void {
+        super().__init()
+        self.name = name
+    }
+
+    define render(self) -> String {
+        return live.html(nav + "<h1 id=\"hello\">Hello, {{ name }}!</h1>", {"name": self.name})
+    }
+
+    define title(self) -> String {
+        return "Hello " + self.name
+    }
+}
+
+define main() -> void {
+    app := web.App()
+    live.configure(head="<style>body{font-family:system-ui;max-width:36rem;margin:2rem auto}button{margin:0 .2rem}</style>")
+    live.page(app, "/", fn(req) { return Counter() })
+    live.page(app, "/todos", fn(req) { return Todos() })
+    live.page(app, "/hello/:name", fn(req) {
+        r: web.Request = req
+        return Hello(String(r.params["name"]))
+    })
+    port := 3000
+    if sys.getenv("PORT") != "" { port = Int(sys.getenv("PORT")) }
+    app.listen(port)
+}

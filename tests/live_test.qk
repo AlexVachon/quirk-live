@@ -1,0 +1,166 @@
+// live v1.0.0 — components, events, forms, typing, navigation, sessions
+// (through live.TestSession: no browser, no network).
+use web
+use live
+use test
+use encoding.json
+
+struct Counter : live.Component {
+    count: Int
+
+    define __init(self) -> void {
+        super().__init()
+        self.count = 0
+    }
+
+    define render(self) -> String {
+        return live.html("<p>Count: {{ n }}</p><button q-click=\"inc\">+1</button><button q-click=\"add\" q-value=\"5\">+5</button>", {"n": self.count})
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        if event == "inc" { self.count = self.count + 1 }
+        if event == "add" { self.count = self.count + Int(data["value"]) }
+        if event == "finish" { self.go("/done") }
+    }
+
+    define title(self) -> String {
+        return "Counter " + String(self.count)
+    }
+}
+
+struct Todos : live.Component {
+    items: List
+    filter: String
+
+    define __init(self) -> void {
+        super().__init()
+        self.items = []
+        self.filter = ""
+    }
+
+    define render(self) -> String {
+        shown := []
+        for it in self.items {
+            s: String = it
+            if self.filter == "" or s.contains(self.filter) { shown.append(s) }
+        }
+        return live.html("<form q-submit=\"add\"><input name=\"text\"></form><input q-input=\"search\" value=\"{{ filter }}\">" +
+                         "<ul>{% for t in shown %}<li>{{ t }}</li>{% else %}<li>nothing</li>{% end %}</ul>",
+                         {"shown": shown, "filter": self.filter})
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        if event == "add" {
+            text := String(data["text"]).trim()
+            if text != "" { self.items.append(text) }
+        } elif event == "search" {
+            self.filter = String(data["value"])
+        }
+    }
+}
+
+struct UserPage : live.Component {
+    name: String
+
+    define __init(self, name: String) -> void {
+        super().__init()
+        self.name = name
+    }
+
+    define render(self) -> String {
+        return live.html("<h1>User {{ name }}</h1><a href=\"/\" q-link>home</a>", {"name": self.name})
+    }
+}
+
+struct Done : live.Component {
+    define render(self) -> String {
+        return "<p>all done</p>"
+    }
+}
+
+define make_app() -> web.App {
+    app := web.App()
+    live.page(app, "/", fn(req) { return Counter() })
+    live.page(app, "/todos", fn(req) { return Todos() })
+    live.page(app, "/users/:name", fn(req) {
+        r: web.Request = req
+        return UserPage(String(r.params["name"]))
+    })
+    live.page(app, "/done", fn(req) { return Done() })
+    return app
+}
+
+define test_counter_events_and_title() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("<!doctype html>"))
+    test.assert_true(s.html.contains("/_live/live.js"))
+    test.assert_true(s.html.contains("<title>Counter 0</title>"))
+    test.assert_true(s.id.length() == 32)                         // 128 random bits
+    s.send("inc")
+    s.send("inc")
+    test.assert_true(s.html.contains("Count: 2"))
+    test.assert_false(s.html.contains("<html"))                   // events return just the component
+    test.assert_eq(s.title, "Counter 2")
+    s.send("add", {"value": "5"})
+    test.assert_true(s.html.contains("Count: 7"))
+}
+
+define test_each_visitor_has_own_state() -> void {
+    app := make_app()
+    a := live.TestSession(app)
+    b := live.TestSession(app)
+    a.open("/")
+    b.open("/")
+    test.assert_true(a.id != b.id)
+    a.send("inc")
+    b.send("inc")
+    b.send("inc")
+    test.assert_true(a.html.contains("Count: 1"))
+    test.assert_true(b.html.contains("Count: 2"))
+}
+
+define test_forms_typing_and_escaping() -> void {
+    s := live.TestSession(make_app())
+    s.open("/todos")
+    test.assert_true(s.html.contains("<li>nothing</li>"))
+    s.send("add", {"text": "milk"})
+    s.send("add", {"text": "<b>bread</b>"})
+    s.send("add", {"text": "   "})
+    test.assert_true(s.html.contains("<li>milk</li>"))
+    test.assert_true(s.html.contains("<li>&lt;b&gt;bread&lt;/b&gt;</li>"))   // user input is escaped
+    test.assert_false(s.html.contains("<b>bread"))
+    s.send("search", {"value": "mi"})
+    test.assert_true(s.html.contains("<li>milk</li>"))
+    test.assert_false(s.html.contains("bread"))
+    test.assert_true(s.html.contains("value=\"mi\""))
+}
+
+define test_navigation_params_and_go() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    first := s.id
+    s.navigate("/users/ada")
+    test.assert_true(s.html.contains("<h1>User ada</h1>"))
+    test.assert_true(s.id != first)                               // a new component for the page
+    s.navigate("/")
+    test.assert_true(s.html.contains("Count: 0"))
+    s.send("finish")                                              // handle() called self.go("/done")
+    test.assert_true(s.html.contains("all done"))
+    test.assert_eq(s.location, "/done")
+    s.navigate("/not-live")                                       // not a live page: a normal load
+    test.assert_eq(s.status, 404)
+}
+
+define test_unknown_session_and_script() -> void {
+    app := make_app()
+    c := web.TestClient(app)
+    r := c.post_json("/_live/event", {"id": "nope", "event": "inc", "data": {}})
+    m: Map = json.loads(r.body)
+    test.assert_eq(m["reload"], true)                              // expired: the page reloads
+    js := c.get("/_live/live.js")
+    test.assert_eq(js.get("Content-Type"), "text/javascript; charset=utf-8")
+    test.assert_true(js.body.contains("q-click"))
+    test.assert_true(live.session_count() >= 0)
+}

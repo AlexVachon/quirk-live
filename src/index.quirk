@@ -1,0 +1,463 @@
+---
+live — interactive web pages written only in Quirk.
+
+A page is a Component: state in fields, a template in `render()`, events
+in `handle()`. It runs on the server (inside a `web` app); a click or a
+keystroke goes to it, it re-renders, and the page updates in place — no
+reload, and no JavaScript to write (a small fixed script that ships with
+this package does the browser's part).
+
+@example
+use web
+use live
+
+struct Counter : live.Component {
+    count: Int
+
+    define __init(self) -> void {
+        super().__init()
+        self.count = 0
+    }
+
+    define render(self) -> String {
+        return live.html("<p>{{ n }}</p><button q-click='inc'>+1</button>", {"n": self.count})
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        if event == "inc" { self.count = self.count + 1 }
+    }
+}
+
+app := web.App()
+live.page(app, "/", fn(req) { return Counter() })
+app.listen(3000)
+---
+use web
+use crypto
+use encoding.json
+
+// ===== components =====
+
+---
+A live component — subclass it. Keep its state in fields; return its
+HTML from `render()` (usually `live.html(template, data)`); react to the
+events its template names in `handle(event, data)`:
+
+    <button q-click="save">          a click      (data: q-value / data-* attributes)
+    <form q-submit="add">            a submit     (data: the form's fields)
+    <input q-input="search">         typing       (data["value"], sent after a pause)
+    <select q-change="pick">         a change     (data["value"]; checkboxes "true"/"false")
+    <input q-enter="send">           Enter key    (data["value"])
+    <a href="/about" q-link>         navigate to another live page without a reload
+
+Override `title()` for the page title. In `handle`, `self.go(path)`
+navigates the browser to another page after the update.
+---
+struct Component {
+    id: String
+    request: web.Request
+    _go: String
+
+    define __init(self) -> void {
+        self.id = ""
+        self.request = null
+        self._go = ""
+    }
+
+    --- The component's HTML (override). ---
+    define render(self) -> String {
+        return ""
+    }
+
+    --- React to `event` from the page (override); `data` holds the event's values (Strings). ---
+    define handle(self, event: String, data: Map) -> void {
+    }
+
+    --- The page title while this component is shown (override; "" leaves it). ---
+    define title(self) -> String {
+        return ""
+    }
+
+    --- After this event, send the browser to `path` (a live page, or any URL). ---
+    define go(self, path: String) -> void {
+        self._go = path
+    }
+
+    // The component wrapped in its root element (what the page holds).
+    define _root_html(self) -> String {
+        return "<div q-root=\"" + self.id + "\">" + self.render() + "</div>"
+    }
+}
+
+// ===== templates =====
+
+_templates := {}
+
+---
+`template` (web's template syntax: `{{ value }}`, `{% if %}`, `{% for %}`
+...) rendered with `data` — escaped, so user input can't inject HTML.
+Templates are parsed once and cached.
+---
+define html(template: String, data: Map = {}) -> String {
+    if not _templates.has(template) {
+        _templates[template] = web.Template(template)
+    }
+    t: web.Template = _templates[template]
+    return t.render(data)
+}
+
+// ===== sessions =====
+
+// id → [component, last used (ms)]
+_sessions := {}
+_session_ttl_ms := [30 * 60 * 1000]
+
+define _store(comp: Component) -> String {
+    _sweep()
+    id := crypto.random_hex(16)
+    comp.id = id
+    _sessions[id] = [comp, web.now() * 1000]
+    return id
+}
+
+// Forget components unused for longer than the time-to-live.
+define _sweep() -> void {
+    now := web.now() * 1000
+    ttl: Int = _session_ttl_ms[0]
+    stale := []
+    for k in _sessions.keys() {
+        key: String = k
+        entry: List = _sessions[key]
+        last: Int = entry[1]
+        if now - last > ttl { stale.append(key) }
+    }
+    for k in stale {
+        key: String = k
+        _sessions.remove(key)
+    }
+}
+
+define _find(id: String) -> Component {
+    if not _sessions.has(id) { return null }
+    entry: List = _sessions[id]
+    entry[1] = web.now() * 1000
+    c: Component = entry[0]
+    return c
+}
+
+--- How long a page's component is kept after its last event (minutes; default 30). ---
+define session_minutes(minutes: Int) -> void {
+    _session_ttl_ms[0] = minutes * 60 * 1000
+}
+
+--- The number of live components the server is holding (open pages). ---
+define session_count() -> Int {
+    return _sessions.keys().length()
+}
+
+// ===== the browser side (fixed; you never edit it) =====
+
+_client_js := """(function () {
+  function post(url, body) {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); });
+  }
+  function rootOf(el) { return el && el.closest ? el.closest('[q-root]') : null; }
+  function dataOf(el) {
+    var d = {}, k;
+    for (k in el.dataset) d[k] = el.dataset[k];
+    if (el.hasAttribute('q-value')) d.value = el.getAttribute('q-value');
+    else if (el.type === 'checkbox' || el.type === 'radio') d.value = String(el.checked);
+    else if ('value' in el && el.type !== 'submit' && el.type !== 'button') d.value = el.value;
+    return d;
+  }
+  function send(el, event, data) {
+    var root = rootOf(el);
+    if (!root || !event) return;
+    post('/_live/event', { id: root.getAttribute('q-root'), event: event, data: data })
+      .then(function (res) { apply(root, res); })
+      .catch(function (err) { console.error('live:', err); });
+  }
+  function apply(root, res) {
+    if (res.reload) { location.reload(); return; }
+    if (res.redirect) { navigate(res.redirect, true); return; }
+    if (typeof res.html === 'string') morph(root, res.html);
+    if (res.title) document.title = res.title;
+  }
+  function morph(root, html) {
+    var t = document.createElement('div');
+    t.innerHTML = html;
+    patchChildren(root, t);
+  }
+  function patchChildren(a, b) {
+    var i, bc = b.childNodes;
+    for (i = 0; i < bc.length; i++) {
+      if (i >= a.childNodes.length) a.appendChild(bc[i].cloneNode(true));
+      else patch(a.childNodes[i], bc[i]);
+    }
+    while (a.childNodes.length > bc.length) a.removeChild(a.lastChild);
+  }
+  function patch(a, b) {
+    if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.parentNode.replaceChild(b.cloneNode(true), a); return; }
+    if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+    if (a.nodeType !== 1) return;
+    var i, name, focused = a === document.activeElement;
+    for (i = a.attributes.length - 1; i >= 0; i--) { name = a.attributes[i].name; if (!b.hasAttribute(name)) a.removeAttribute(name); }
+    for (i = 0; i < b.attributes.length; i++) { name = b.attributes[i].name; if (a.getAttribute(name) !== b.attributes[i].value) a.setAttribute(name, b.attributes[i].value); }
+    if (a.nodeName === 'INPUT') {
+      if (!focused) {
+        if (a.type === 'checkbox' || a.type === 'radio') a.checked = b.hasAttribute('checked');
+        else a.value = b.getAttribute('value') || '';
+      }
+      return;
+    }
+    if (a.nodeName === 'TEXTAREA') { if (!focused) a.value = b.textContent; return; }
+    patchChildren(a, b);
+    if (a.nodeName === 'SELECT' && !focused) {
+      for (i = 0; i < a.options.length; i++) a.options[i].selected = a.options[i].hasAttribute('selected');
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest ? e.target.closest('a[q-link]') : null;
+    if (link && e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      navigate(link.getAttribute('href'), true);
+      return;
+    }
+    var el = e.target.closest ? e.target.closest('[q-click]') : null;
+    if (el) { e.preventDefault(); send(el, el.getAttribute('q-click'), dataOf(el)); }
+  });
+  document.addEventListener('submit', function (e) {
+    var f = e.target.closest ? e.target.closest('form[q-submit]') : null;
+    if (!f) return;
+    e.preventDefault();
+    var d = {};
+    new FormData(f).forEach(function (v, k) { d[k] = String(v); });
+    send(f, f.getAttribute('q-submit'), d);
+  });
+  var timers = {};
+  document.addEventListener('input', function (e) {
+    var el = e.target.closest ? e.target.closest('[q-input]') : null;
+    if (!el) return;
+    var key = el.getAttribute('q-input');
+    clearTimeout(timers[key]);
+    timers[key] = setTimeout(function () { send(el, key, dataOf(el)); }, 150);
+  });
+  document.addEventListener('change', function (e) {
+    var el = e.target.closest ? e.target.closest('[q-change]') : null;
+    if (el) send(el, el.getAttribute('q-change'), dataOf(el));
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    var el = e.target.closest ? e.target.closest('[q-enter]') : null;
+    if (el) { e.preventDefault(); send(el, el.getAttribute('q-enter'), dataOf(el)); }
+  });
+  function navigate(path, push) {
+    fetch('/_live/nav?path=' + encodeURIComponent(path))
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        var root = document.querySelector('[q-root]');
+        if (res.reload || !res.id || !root) { location.href = path; return; }
+        root.setAttribute('q-root', res.id);
+        morph(root, res.html);
+        if (res.title) document.title = res.title;
+        if (push) history.pushState({}, '', path);
+        window.scrollTo(0, 0);
+      })
+      .catch(function () { location.href = path; });
+  }
+  window.addEventListener('popstate', function () { navigate(location.pathname + location.search, false); });
+})();
+"""
+
+// ===== pages =====
+
+// [pattern Route, factory] per live page, for navigation without a reload.
+_pages := []
+_installed := []
+_settings := {"head": "", "layout": ""}
+
+_default_layout := """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+{{ head | raw }}
+<script src="/_live/live.js" defer></script>
+</head>
+<body>
+{{ body | raw }}
+</body>
+</html>"""
+
+---
+Page settings: `head` — HTML added to every page's <head> (stylesheets,
+meta tags); `layout` — a whole page template of your own, with
+`{{ title }}`, `{{ head | raw }}`, `{{ body | raw }}` and a
+`<script src="/_live/live.js" defer></script>`.
+---
+define configure(head: String = "", layout: String = "") -> void {
+    _settings["head"] = head
+    _settings["layout"] = layout
+}
+
+---
+Serve a live page at `path` (":params" allowed, as in web routes):
+`factory(req)` makes the page's component — one per visitor, kept while
+they use it. Links with `q-link` between live pages switch without a
+reload, and Back / Forward work.
+---
+define page(app: web.App, path: String, factory: Callable) -> void {
+    _install(app)
+    _pages.append([web.Route("GET", path, factory), factory])
+    app.get(path, fn(req, res) {
+        r: web.Request = req
+        rs: web.Response = res
+        comp := _make(factory, r)
+        rs.html(_page_html(comp))
+    })
+}
+
+define _make(factory: Callable, req: web.Request) -> Component {
+    comp: Component = factory(req)
+    if comp == null { throw web.HttpError(500, "live: the page factory returned null") }
+    comp.request = req
+    _store(comp)
+    return comp
+}
+
+define _page_html(comp: Component) -> String {
+    t := comp.title()
+    custom: String = _settings["layout"]
+    layout := custom != "" ? custom : _default_layout
+    head: String = _settings["head"]
+    return html(layout, {"title": t, "head": head, "body": comp._root_html()})
+}
+
+define _install(app: web.App) -> void {
+    for a in _installed {
+        known: web.App = a
+        if known == app { return }
+    }
+    _installed.append(app)
+    app.get("/_live/live.js", fn(req, res) {
+        rs: web.Response = res
+        rs.set("Content-Type", "text/javascript; charset=utf-8")
+        rs.set("Cache-Control", "public, max-age=3600")
+        rs.send(_client_js)
+    })
+    app.post("/_live/event", fn(req, res) {
+        r: web.Request = req
+        rs: web.Response = res
+        msg: Map = r.json()
+        if msg == null { throw web.HttpError(400, "live: no event") }
+        id := String(msg["id"])
+        comp := _find(id)
+        if comp == null {
+            rs.json({"reload": true})              // expired / server restarted
+            return
+        }
+        event := String(msg["event"])
+        data: Map = {}
+        if msg.has("data") and msg["data"] != null { data = msg["data"] }
+        comp._go = ""
+        comp.handle(event, data)
+        if comp._go != "" {
+            rs.json({"redirect": comp._go})
+            return
+        }
+        rs.json({"html": comp.render(), "title": comp.title()})
+    })
+    app.get("/_live/nav", fn(req, res) {
+        r: web.Request = req
+        rs: web.Response = res
+        target := r.query.has("path") ? String(r.query["path"]) : "/"
+        nav := web.Request("GET", target, r.headers)
+        for p in _pages {
+            entry: List = p
+            route: web.Route = entry[0]
+            params := route.match_path(nav.path)
+            if params != null {
+                nav.params = params
+                factory: Callable = entry[1]
+                comp := _make(factory, nav)
+                rs.json({"id": comp.id, "html": comp.render(), "title": comp.title()})
+                return
+            }
+        }
+        rs.json({"reload": true})                  // not a live page: load it normally
+    })
+}
+
+// ===== testing =====
+
+---
+Drive live pages in tests, without a browser:
+
+    s := live.TestSession(app)
+    s.open("/")
+    s.send("inc")
+    test.assert_true(s.html.contains("<p>1</p>"))
+
+`html` is the component's current HTML; `title` its title.
+---
+struct TestSession {
+    client: web.TestClient
+    id: String
+    html: String
+    title: String
+    status: Int
+    location: String
+
+    define __init(self, app: web.App) -> void {
+        self.client = web.TestClient(app)
+        self.id = ""
+        self.html = ""
+        self.title = ""
+        self.status = 0
+        self.location = ""
+    }
+
+    --- Load the page at `path`. ---
+    define open(self, path: String) -> TestSession {
+        res := self.client.get(path)
+        self.status = res.status_code
+        self.html = res.body
+        self.location = path
+        at := res.body.find("q-root=\"")
+        if at >= 0 {
+            rest := res.body.substring(at + 8, res.body.length())
+            self.id = rest.substring(0, rest.find("\""))
+        }
+        return self
+    }
+
+    --- Send `event` (with `data`) to the page's component, as the browser would. ---
+    define send(self, event: String, data: Map = {}) -> TestSession {
+        res := self.client.post_json("/_live/event", {"id": self.id, "event": event, "data": data})
+        self.status = res.status_code
+        if res.status_code != 200 { return self }
+        m: Map = json.loads(res.body)
+        if m.has("redirect") {
+            self.navigate(String(m["redirect"]))
+            return self
+        }
+        if m.has("html") { self.html = String(m["html"]) }
+        if m.has("title") { self.title = String(m["title"]) }
+        return self
+    }
+
+    --- Follow a `q-link` to `path`. ---
+    define navigate(self, path: String) -> TestSession {
+        res := self.client.get("/_live/nav?path=" + path)
+        self.status = res.status_code
+        m: Map = json.loads(res.body)
+        self.location = path
+        if m.has("reload") { return self.open(path) }
+        self.id = String(m["id"])
+        self.html = String(m["html"])
+        self.title = String(m["title"])
+        return self
+    }
+}

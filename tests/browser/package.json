@@ -1,0 +1,7 @@
+{
+  "name": "live-browser-check",
+  "private": true,
+  "type": "module",
+  "description": "Checks live.js in a real DOM (jsdom) against a running live app",
+  "devDependencies": { "jsdom": "^24.0.0" }
+}
