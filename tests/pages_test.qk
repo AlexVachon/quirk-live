@@ -1,0 +1,240 @@
+// live 2 — pages built from widgets: on_load, build, handlers (callbacks
+// and overridden methods), a Router of page structs, TestSession helpers.
+use web
+use live
+use test
+
+struct CounterPage : live.Page {
+    count: Int
+
+    define on_load(self) -> void {
+        self.count = 0
+    }
+
+    define build(self) -> live.Widget {
+        return live.Column([
+            live.Heading("Counter"),
+            live.Label("Count: " + String(self.count)),
+            live.Row([
+                live.Button("-1", on_click=fn() { self.count = self.count - 1 }),
+                PlusTen(self),
+            ]),
+            live.Link("Todos", "/todos"),
+        ])
+    }
+
+    define title(self) -> String {
+        return "Counter " + String(self.count)
+    }
+}
+
+// A button of your own: override on_click.
+struct PlusTen : live.Button {
+    page: CounterPage
+
+    define __init(self, page: CounterPage) -> void {
+        super().__init("+10")
+        self.page = page
+    }
+
+    define on_click(self) -> void {
+        self.page.count = self.page.count + 10
+    }
+}
+
+// A widget made of other widgets.
+struct TodoItem : live.Widget {
+    text: String
+    done: Bool
+
+    define __init(self, text: String, done: Bool) -> void {
+        super().__init()
+        self.text = text
+        self.done = done
+    }
+
+    define build(self) -> live.Widget {
+        mark := self.done ? "[x] " : "[ ] "
+        return live.Label(mark + self.text).with_class("todo")
+    }
+}
+
+struct TodoPage : live.Page {
+    items: List
+    done: List
+    draft: String
+    filter: String
+    show_done: Bool
+    picked: String
+    level: Int
+
+    define on_load(self) -> void {
+        self.items = ["milk"]
+        self.done = [false]
+        self.draft = ""
+        self.filter = ""
+        self.show_done = true
+        self.picked = ""
+        self.level = 0
+    }
+
+    define build(self) -> live.Widget {
+        rows := []
+        i := 0
+        for it in self.items {
+            text: String = it
+            d: Bool = self.done[i]
+            if (self.filter == "" or text.contains(self.filter)) and (self.show_done or not d) {
+                rows.append(TodoItem(text, d))
+            }
+            i = i + 1
+        }
+        return live.Column([
+            live.TextInput(self.draft, placeholder="New item",
+                           on_change=fn(text) { self.draft = text },
+                           on_submit=fn(text) {
+                               t := String(text).trim()
+                               if t != "" {
+                                   self.items.append(t)
+                                   self.done.append(false)
+                               }
+                               self.draft = ""
+                           }),
+            live.Button("Add", on_click=fn() {
+                if self.draft != "" {
+                    self.items.append(self.draft)
+                    self.done.append(false)
+                }
+                self.draft = ""
+            }),
+            live.TextInput(self.filter, placeholder="Search", on_change=fn(text) { self.filter = text }),
+            live.Checkbox("Show done", checked=self.show_done, on_change=fn(on) { self.show_done = on }),
+            live.ListView(rows),
+            live.ListView(self.items, on_select=fn(index, item) { self.done[index] = true }),
+            live.Dropdown(["low", "high"], selected=self.level, on_change=fn(index, option) {
+                self.level = index
+                self.picked = String(option)
+            }),
+            live.Label("picked " + self.picked),
+        ])
+    }
+}
+
+struct UserPage : live.Page {
+    name: String
+
+    define on_load(self) -> void {
+        self.name = self.param("name")
+        if self.query("upper") == "1" { self.name = self.name.upper() }
+    }
+
+    define build(self) -> live.Widget {
+        return live.Column([
+            live.Heading("User " + self.name, level=2),
+            live.Html("<hr>"),
+            live.Button("Done", on_click=fn() { self.go("/") }),
+            live.Table(["key", "value"], [["name", self.name], ["n", 3]]),
+        ])
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/", CounterPage)
+    router.add("/todos", TodoPage)
+    router.add("/users/:name", UserPage)
+    router.get("/api/ping", fn(req, res) {
+        rs: web.Response = res
+        rs.send("pong")
+    })
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_counter_page() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("<h1>Counter</h1>"))
+    test.assert_true(s.html.contains("<p>Count: 0</p>"))
+    test.assert_true(s.html.contains("<title>Counter 0</title>"))
+    test.assert_true(s.html.contains("q-click=\"w"))
+    test.assert_true(s.html.contains("<a href=\"/todos\" q-link>Todos</a>"))
+    s.click("-1")
+    test.assert_true(s.html.contains("Count: -1"))
+    s.click("+10")                                              // the overridden on_click
+    s.click("+10")
+    test.assert_true(s.html.contains("Count: 19"))
+    test.assert_eq(s.title, "Counter 19")
+}
+
+define test_each_visitor_own_page() -> void {
+    app := make_app()
+    a := live.TestSession(app)
+    b := live.TestSession(app)
+    a.open("/")
+    b.open("/")
+    a.click("+10")
+    test.assert_true(a.html.contains("Count: 10"))
+    test.assert_true(b.html.contains("Count: 0"))
+}
+
+define test_inputs_lists_and_escaping() -> void {
+    s := live.TestSession(make_app())
+    s.open("/todos")
+    test.assert_true(s.html.contains("[ ] milk"))
+    test.assert_true(s.html.contains("class=\"todo\""))
+    test.assert_true(s.html.contains("placeholder=\"New item\""))
+    s.submit("New item", "bread")
+    test.assert_true(s.html.contains("[ ] bread"))
+    test.assert_true(s.html.contains("value=\"\""))                // cleared after submit
+    s.type("New item", "<b>jam</b>")
+    test.assert_true(s.html.contains("value=\"&lt;b&gt;jam&lt;/b&gt;\""))
+    s.click("Add")
+    test.assert_true(s.html.contains("[ ] &lt;b&gt;jam&lt;/b&gt;"))  // escaped, not HTML
+    test.assert_false(s.html.contains("<b>jam"))
+    s.type("Search", "rea")
+    test.assert_true(s.html.contains("bread"))
+    test.assert_false(s.html.contains("[ ] milk"))
+    s.type("Search", "")
+    s.send("w0:nothing")                                            // unknown widget: ignored
+    test.assert_eq(s.status, 200)
+}
+
+define test_select_check_and_dropdown() -> void {
+    s := live.TestSession(make_app())
+    s.open("/todos")
+    // the second ListView: clicking item 0 marks it done
+    test.assert_true(s.html.contains("q-value=\"0\" q-click=\"w"))
+    page_html := s.html
+    at := page_html.find("q-value=\"0\" q-click=\"")
+    rest := page_html.substring(at + 21, page_html.length())
+    event := rest.substring(0, rest.find("\""))
+    s.send(event, {"value": "0"})
+    test.assert_true(s.html.contains("[x] milk"))
+    s.check("Show done", false)
+    test.assert_false(s.html.contains("[x] milk"))
+    test.assert_false(s.html.contains("checked"))
+    s.check("Show done", true)
+    test.assert_true(s.html.contains("[x] milk"))
+    s.choose("low", 1)
+    test.assert_true(s.html.contains("picked high"))
+    test.assert_true(s.html.contains("<option value=\"1\" selected>high</option>"))
+}
+
+define test_params_query_go_and_plain_routes() -> void {
+    app := make_app()
+    s := live.TestSession(app)
+    s.open("/users/ada?upper=1")
+    test.assert_true(s.html.contains("<h2>User ADA</h2>"))
+    test.assert_true(s.html.contains("<hr>"))
+    test.assert_true(s.html.contains("<td>n</td><td>3</td>"))
+    s.click("Done")
+    test.assert_eq(s.location, "/")
+    test.assert_true(s.html.contains("Count: 0"))
+    s.navigate("/users/bob")
+    test.assert_true(s.html.contains("User bob"))
+    c := web.TestClient(app)
+    test.assert_eq(c.get("/api/ping").body, "pong")
+}

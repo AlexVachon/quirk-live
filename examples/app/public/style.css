@@ -1,0 +1,4 @@
+body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; }
+.nav { margin-bottom: 1rem; }
+.count { font-size: 2rem; margin: 0; }
+ul { padding-left: 1.2rem; }

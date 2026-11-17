@@ -1,35 +1,37 @@
 ---
 live — interactive web pages written only in Quirk.
 
-A page is a Component: state in fields, a template in `render()`, events
-in `handle()`. It runs on the server (inside a `web` app); a click or a
-keystroke goes to it, it re-renders, and the page updates in place — no
-reload, and no JavaScript to write (a small fixed script that ships with
-this package does the browser's part).
+A page is a struct: its state in fields, `on_load()` to set it up when
+someone opens the page, and `build()` returning the widgets to show
+(Label, Button, TextInput, Column, ...). A click or a keystroke runs the
+widget's handler on the server, the page is built again, and the browser
+updates in place — no reload, and no JavaScript or HTML to write.
 
 @example
 use web
 use live
 
-struct Counter : live.Component {
+struct CounterPage : live.Page {
     count: Int
 
-    define __init(self) -> void {
-        super().__init()
+    define on_load(self) -> void {
         self.count = 0
     }
 
-    define render(self) -> String {
-        return live.html("<p>{{ n }}</p><button q-click='inc'>+1</button>", {"n": self.count})
-    }
-
-    define handle(self, event: String, data: Map) -> void {
-        if event == "inc" { self.count = self.count + 1 }
+    define build(self) -> live.Widget {
+        return live.Column([
+            live.Heading("Counter"),
+            live.Label("Count: " + String(self.count)),
+            live.Button("+1", on_click=fn() { self.count = self.count + 1 }),
+        ])
     }
 }
 
+router := live.Router()
+router.add("/", CounterPage)
+
 app := web.App()
-live.page(app, "/", fn(req) { return Counter() })
+app.mount("/", router)
 app.listen(3000)
 ---
 use web
@@ -39,7 +41,8 @@ use encoding.json
 // ===== components =====
 
 ---
-A live component — subclass it. Keep its state in fields; return its
+A template component — the HTML way to write a page (`live.Page` is the
+widget way). Subclass it. Keep its state in fields; return its
 HTML from `render()` (usually `live.html(template, data)`); react to the
 events its template names in `handle(event, data)`:
 
@@ -83,9 +86,692 @@ struct Component {
         self._go = path
     }
 
+    // Runs once, when the component is made for a visitor (a Page's on_load).
+    define _start(self) -> void {
+    }
+
+    // The first widget of the last build labelled `text` (a Page's; else null).
+    define _widget(self, text: String) -> Widget {
+        return null
+    }
+
     // The component wrapped in its root element (what the page holds).
     define _root_html(self) -> String {
         return "<div q-root=\"" + self.id + "\">" + self.render() + "</div>"
+    }
+}
+
+// ===== widgets =====
+
+---
+Something on a page. The built-in widgets (Label, Button, TextInput,
+Column, ...) render themselves; for one of your own, subclass Widget and
+return what it's made of from `build()`:
+
+    struct TodoItem : live.Widget {
+        text: String
+        define build(self) -> live.Widget {
+            return live.Row([live.Label(self.text), live.Button("×")])
+        }
+    }
+
+`with_class("name")` / `with_style("css")` add a CSS class / inline
+style (they return the widget, so they chain).
+---
+struct Widget {
+    _id: String
+    _class: String
+    _style: String
+
+    define __init(self) -> void {
+        self._id = ""
+        self._class = ""
+        self._style = ""
+    }
+
+    --- What this widget is made of (override for a widget of your own). ---
+    define build(self) -> Widget {
+        return null
+    }
+
+    --- Add a CSS class. ---
+    define with_class(self, name: String) -> Widget {
+        self._class = self._class == "" ? name : self._class + " " + name
+        return self
+    }
+
+    --- Add inline CSS ("color: red"). ---
+    define with_style(self, css: String) -> Widget {
+        self._style = self._style == "" ? css : self._style + ";" + css
+        return self
+    }
+
+    // Its HTML; `b` gives ids to the widgets inside.
+    define _html(self, b: _Build) -> String {
+        return b.render(self.build())
+    }
+
+    // An event from the browser: `kind` ("click", "change", ...), `data` its values.
+    define _event(self, kind: String, data: Map) -> void {
+    }
+
+    // The text TestSession finds it by.
+    define _label(self) -> String {
+        return ""
+    }
+
+    // class / style attributes, with `style` first.
+    define _attrs(self, style: String = "") -> String {
+        out := ""
+        if self._class != "" { out = out + " class=\"" + web.escape(self._class) + "\"" }
+        css := style
+        if self._style != "" { css = css == "" ? self._style : css + ";" + self._style }
+        if css != "" { out = out + " style=\"" + web.escape(css) + "\"" }
+        return out
+    }
+
+    // The event name the browser sends for `kind`.
+    define _on(self, kind: String) -> String {
+        return self._id + ":" + kind
+    }
+}
+
+// One build of a page: numbers the widgets, so an event finds its widget.
+struct _Build {
+    n: Int
+    widgets: Map
+
+    define __init(self) -> void {
+        self.n = 0
+        self.widgets = {}
+    }
+
+    define render(self, w: Widget) -> String {
+        if w == null { return "" }
+        self.n = self.n + 1
+        w._id = "w" + String(self.n)
+        self.widgets[w._id] = w
+        return w._html(self)
+    }
+
+    // Widgets, or plain values (shown as text).
+    define all(self, items: List) -> String {
+        out := ""
+        for it in items { out = out + self.item(it) }
+        return out
+    }
+
+    define item(self, it: Any) -> String {
+        if it == null { return "" }
+        if it is String or it is Int or it is Double or it is Bool { return web.escape(String(it)) }
+        w: Widget = it
+        return self.render(w)
+    }
+}
+
+define _text(it: Any) -> String {
+    if it == null { return "" }
+    return String(it)
+}
+
+--- A line of text. ---
+struct Label : Widget {
+    text: String
+
+    define __init(self, text: String) -> void {
+        super().__init()
+        self.text = text
+    }
+
+    define _html(self, b: _Build) -> String {
+        return "<p" + self._attrs() + ">" + web.escape(self.text) + "</p>"
+    }
+
+    define _label(self) -> String {
+        return self.text
+    }
+}
+
+--- A title: `level` 1 (largest) to 6. ---
+struct Heading : Widget {
+    text: String
+    level: Int
+
+    define __init(self, text: String, level: Int = 1) -> void {
+        super().__init()
+        self.text = text
+        self.level = level < 1 ? 1 : (level > 6 ? 6 : level)
+    }
+
+    define _html(self, b: _Build) -> String {
+        tag := "h" + String(self.level)
+        return "<" + tag + self._attrs() + ">" + web.escape(self.text) + "</" + tag + ">"
+    }
+
+    define _label(self) -> String {
+        return self.text
+    }
+}
+
+---
+HTML of your own, as is (not escaped — don't put user input in it
+unescaped; `live.html(template, data)` escapes for you).
+---
+struct Html : Widget {
+    source: String
+
+    define __init(self, source: String) -> void {
+        super().__init()
+        self.source = source
+    }
+
+    define _html(self, b: _Build) -> String {
+        return self.source
+    }
+}
+
+---
+A button. `on_click()` runs when it's clicked — pass `on_click=fn() {...}`,
+or subclass Button and override `on_click(self)`.
+---
+struct Button : Widget {
+    text: String
+    _click: Callable
+
+    define __init(self, text: String, on_click: Callable = null) -> void {
+        super().__init()
+        self.text = text
+        self._click = on_click
+    }
+
+    --- Runs on a click (override, or pass `on_click=`). ---
+    define on_click(self) -> void {
+        if self._click != null { self._click() }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind == "click" { self.on_click() }
+    }
+
+    define _html(self, b: _Build) -> String {
+        return "<button type=\"button\"" + self._attrs() + " q-click=\"" + self._on("click") + "\">" + web.escape(self.text) + "</button>"
+    }
+
+    define _label(self) -> String {
+        return self.text
+    }
+}
+
+---
+A link to another page. Between live pages it switches without a reload
+(Back / Forward work); `external=true` for a normal link (another site).
+---
+struct Link : Widget {
+    text: String
+    href: String
+    external: Bool
+
+    define __init(self, text: String, href: String, external: Bool = false) -> void {
+        super().__init()
+        self.text = text
+        self.href = href
+        self.external = external
+    }
+
+    define _html(self, b: _Build) -> String {
+        nav := self.external ? "" : " q-link"
+        return "<a href=\"" + web.escape(self.href) + "\"" + self._attrs() + nav + ">" + web.escape(self.text) + "</a>"
+    }
+
+    define _label(self) -> String {
+        return self.text
+    }
+}
+
+--- A picture; `alt` describes it (for screen readers). ---
+struct Image : Widget {
+    src: String
+    alt: String
+
+    define __init(self, src: String, alt: String = "") -> void {
+        super().__init()
+        self.src = src
+        self.alt = alt
+    }
+
+    define _html(self, b: _Build) -> String {
+        return "<img src=\"" + web.escape(self.src) + "\" alt=\"" + web.escape(self.alt) + "\"" + self._attrs() + ">"
+    }
+}
+
+---
+A one-line text field. `on_change(text)` runs as the user types (after a
+short pause), `on_submit(text)` on Enter. Show the page's state in it
+(`text=self.draft`); set that to "" in on_submit to clear the field.
+---
+struct TextInput : Widget {
+    text: String
+    placeholder: String
+    password: Bool
+    _change: Callable
+    _submit: Callable
+
+    define __init(self, text: String = "", placeholder: String = "", on_change: Callable = null, on_submit: Callable = null, password: Bool = false) -> void {
+        super().__init()
+        self.text = text
+        self.placeholder = placeholder
+        self.password = password
+        self._change = on_change
+        self._submit = on_submit
+    }
+
+    --- Runs as the text changes (override, or pass `on_change=`). ---
+    define on_change(self, text: String) -> void {
+        if self._change != null { self._change(text) }
+    }
+
+    --- Runs on Enter (override, or pass `on_submit=`). ---
+    define on_submit(self, text: String) -> void {
+        if self._submit != null { self._submit(text) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        value := _text(data["value"])
+        self.text = value
+        if kind == "change" { self.on_change(value) }
+        if kind == "submit" { self.on_submit(value) }
+    }
+
+    define _html(self, b: _Build) -> String {
+        kind := self.password ? "password" : "text"
+        out := "<input type=\"" + kind + "\" value=\"" + web.escape(self.text) + "\""
+        if self.placeholder != "" {
+            ph := web.escape(self.placeholder)
+            out = out + " placeholder=\"" + ph + "\" aria-label=\"" + ph + "\""
+        }
+        return out + self._attrs() + " q-input=\"" + self._on("change") + "\" q-enter=\"" + self._on("submit") + "\">"
+    }
+
+    define _label(self) -> String {
+        return self.placeholder
+    }
+}
+
+--- A text field of several lines; `on_change(text)` as the user types. ---
+struct TextArea : Widget {
+    text: String
+    rows: Int
+    placeholder: String
+    _change: Callable
+
+    define __init(self, text: String = "", rows: Int = 4, on_change: Callable = null, placeholder: String = "") -> void {
+        super().__init()
+        self.text = text
+        self.rows = rows
+        self.placeholder = placeholder
+        self._change = on_change
+    }
+
+    --- Runs as the text changes (override, or pass `on_change=`). ---
+    define on_change(self, text: String) -> void {
+        if self._change != null { self._change(text) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        value := _text(data["value"])
+        self.text = value
+        if kind == "change" { self.on_change(value) }
+    }
+
+    define _html(self, b: _Build) -> String {
+        out := "<textarea rows=\"" + String(self.rows) + "\""
+        if self.placeholder != "" {
+            ph := web.escape(self.placeholder)
+            out = out + " placeholder=\"" + ph + "\" aria-label=\"" + ph + "\""
+        }
+        return out + self._attrs() + " q-input=\"" + self._on("change") + "\">" + web.escape(self.text) + "</textarea>"
+    }
+
+    define _label(self) -> String {
+        return self.placeholder
+    }
+}
+
+--- A box that's ticked or not, with a label; `on_change(checked)` when it's clicked. ---
+struct Checkbox : Widget {
+    text: String
+    checked: Bool
+    _change: Callable
+
+    define __init(self, text: String, checked: Bool = false, on_change: Callable = null) -> void {
+        super().__init()
+        self.text = text
+        self.checked = checked
+        self._change = on_change
+    }
+
+    --- Runs when it's ticked or unticked (override, or pass `on_change=`). ---
+    define on_change(self, checked: Bool) -> void {
+        if self._change != null { self._change(checked) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind != "change" { return }
+        self.checked = _text(data["value"]) == "true"
+        self.on_change(self.checked)
+    }
+
+    define _html(self, b: _Build) -> String {
+        tick := self.checked ? " checked" : ""
+        return "<label" + self._attrs() + "><input type=\"checkbox\"" + tick + " q-change=\"" + self._on("change") + "\"> " + web.escape(self.text) + "</label>"
+    }
+
+    define _label(self) -> String {
+        return self.text
+    }
+}
+
+---
+A list to pick one of `options` from; `selected` is the index shown.
+`on_change(index, option)` when another is picked.
+---
+struct Dropdown : Widget {
+    options: List
+    selected: Int
+    _change: Callable
+
+    define __init(self, options: List, selected: Int = 0, on_change: Callable = null) -> void {
+        super().__init()
+        self.options = options
+        self.selected = selected
+        self._change = on_change
+    }
+
+    --- Runs when another option is picked (override, or pass `on_change=`). ---
+    define on_change(self, index: Int, option: Any) -> void {
+        if self._change != null { self._change(index, option) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind != "change" { return }
+        i := Int(_text(data["value"]))
+        if i < 0 or i >= self.options.length() { return }
+        self.selected = i
+        self.on_change(i, self.options[i])
+    }
+
+    define _html(self, b: _Build) -> String {
+        out := "<select" + self._attrs() + " q-change=\"" + self._on("change") + "\">"
+        i := 0
+        for o in self.options {
+            sel := i == self.selected ? " selected" : ""
+            out = out + "<option value=\"" + String(i) + "\"" + sel + ">" + web.escape(_text(o)) + "</option>"
+            i = i + 1
+        }
+        return out + "</select>"
+    }
+
+    define _label(self) -> String {
+        if self.options.length() == 0 { return "" }
+        return _text(self.options[0])
+    }
+}
+
+--- A number picked with a handle; `on_change(value)` when it's moved. ---
+struct Slider : Widget {
+    min: Int
+    max: Int
+    value: Int
+    step: Int
+    _change: Callable
+
+    define __init(self, min: Int = 0, max: Int = 100, value: Int = 50, on_change: Callable = null, step: Int = 1) -> void {
+        super().__init()
+        self.min = min
+        self.max = max
+        self.value = value
+        self.step = step
+        self._change = on_change
+    }
+
+    --- Runs when the value changes (override, or pass `on_change=`). ---
+    define on_change(self, value: Int) -> void {
+        if self._change != null { self._change(value) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind != "change" { return }
+        self.value = Int(_text(data["value"]))
+        self.on_change(self.value)
+    }
+
+    define _html(self, b: _Build) -> String {
+        return "<input type=\"range\" min=\"" + String(self.min) + "\" max=\"" + String(self.max) + "\" step=\"" + String(self.step) +
+               "\" value=\"" + String(self.value) + "\"" + self._attrs() + " q-change=\"" + self._on("change") + "\">"
+    }
+}
+
+--- Widgets one above the other, `spacing` pixels apart. ---
+struct Column : Widget {
+    children: List
+    spacing: Int
+
+    define __init(self, children: List, spacing: Int = 8) -> void {
+        super().__init()
+        self.children = children
+        self.spacing = spacing
+    }
+
+    define _html(self, b: _Build) -> String {
+        css := "display:flex;flex-direction:column;gap:" + String(self.spacing) + "px"
+        return "<div" + self._attrs(css) + ">" + b.all(self.children) + "</div>"
+    }
+}
+
+--- Widgets side by side, `spacing` pixels apart (wrapping when the window is narrow). ---
+struct Row : Widget {
+    children: List
+    spacing: Int
+
+    define __init(self, children: List, spacing: Int = 8) -> void {
+        super().__init()
+        self.children = children
+        self.spacing = spacing
+    }
+
+    define _html(self, b: _Build) -> String {
+        css := "display:flex;flex-wrap:wrap;align-items:center;gap:" + String(self.spacing) + "px"
+        return "<div" + self._attrs(css) + ">" + b.all(self.children) + "</div>"
+    }
+}
+
+--- Empty space that pushes the widgets after it in a Row to the end. ---
+struct Spacer : Widget {
+    define _html(self, b: _Build) -> String {
+        return "<div" + self._attrs("flex:1") + "></div>"
+    }
+}
+
+---
+A bulleted list of `items` — text, or widgets. With `on_select`, an item
+can be clicked: `on_select(index, item)`.
+---
+struct ListView : Widget {
+    items: List
+    _select: Callable
+
+    define __init(self, items: List, on_select: Callable = null) -> void {
+        super().__init()
+        self.items = items
+        self._select = on_select
+    }
+
+    --- Runs when an item is clicked (override, or pass `on_select=`). ---
+    define on_select(self, index: Int, item: Any) -> void {
+        if self._select != null { self._select(index, item) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind != "select" { return }
+        i := Int(_text(data["value"]))
+        if i < 0 or i >= self.items.length() { return }
+        self.on_select(i, self.items[i])
+    }
+
+    define _html(self, b: _Build) -> String {
+        out := "<ul" + self._attrs() + ">"
+        i := 0
+        for it in self.items {
+            if self._select != null {
+                out = out + "<li q-value=\"" + String(i) + "\" q-click=\"" + self._on("select") + "\">" + b.item(it) + "</li>"
+            } else {
+                out = out + "<li>" + b.item(it) + "</li>"
+            }
+            i = i + 1
+        }
+        return out + "</ul>"
+    }
+}
+
+---
+A table: `columns` the header texts, `rows` a List of rows (each a List of
+cells — text or widgets). With `on_select`, a row can be clicked:
+`on_select(index, row)`.
+---
+struct Table : Widget {
+    columns: List
+    rows: List
+    _select: Callable
+
+    define __init(self, columns: List, rows: List, on_select: Callable = null) -> void {
+        super().__init()
+        self.columns = columns
+        self.rows = rows
+        self._select = on_select
+    }
+
+    --- Runs when a row is clicked (override, or pass `on_select=`). ---
+    define on_select(self, index: Int, row: List) -> void {
+        if self._select != null { self._select(index, row) }
+    }
+
+    define _event(self, kind: String, data: Map) -> void {
+        if kind != "select" { return }
+        i := Int(_text(data["value"]))
+        if i < 0 or i >= self.rows.length() { return }
+        row: List = self.rows[i]
+        self.on_select(i, row)
+    }
+
+    define _html(self, b: _Build) -> String {
+        out := "<table" + self._attrs() + "><thead><tr>"
+        for c in self.columns { out = out + "<th>" + b.item(c) + "</th>" }
+        out = out + "</tr></thead><tbody>"
+        i := 0
+        for r in self.rows {
+            row: List = r
+            if self._select != null {
+                out = out + "<tr q-value=\"" + String(i) + "\" q-click=\"" + self._on("select") + "\">"
+            } else {
+                out = out + "<tr>"
+            }
+            for cell in row { out = out + "<td>" + b.item(cell) + "</td>" }
+            out = out + "</tr>"
+            i = i + 1
+        }
+        return out + "</tbody></table>"
+    }
+}
+
+// ===== pages =====
+
+---
+A page — subclass it. Keep the page's state in fields; set it up in
+`on_load()` (runs once, when someone opens the page: read
+`self.param("id")`, load from a database or an API); return what to show
+from `build()`. After every event the page is built again.
+
+    struct TodoPage : live.Page {
+        items: List
+        draft: String
+
+        define on_load(self) -> void {
+            self.items = []
+            self.draft = ""
+        }
+
+        define build(self) -> live.Widget {
+            return live.Column([
+                live.TextInput(self.draft, placeholder="New item", on_submit=fn(text) {
+                    self.items.append(text)
+                    self.draft = ""
+                }),
+                live.ListView(self.items),
+            ])
+        }
+    }
+
+Serve pages with a `live.Router` (`router.add("/todos", TodoPage)`).
+`title()` sets the page title; `self.go(path)` (in a handler) sends the
+browser to another page.
+---
+struct Page : Component {
+    _widgets: Map
+
+    define __init(self) -> void {
+        super().__init()
+        self._widgets = {}
+    }
+
+    --- Set up the page's state (override). Runs once per visitor, before the first build. ---
+    define on_load(self) -> void {
+    }
+
+    --- What the page shows (override). ---
+    define build(self) -> Widget {
+        return null
+    }
+
+    --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
+    define param(self, name: String) -> String {
+        if self.request == null or not self.request.params.has(name) { return "" }
+        return _text(self.request.params[name])
+    }
+
+    --- A `?name=value` of the page's URL; "" if none. ---
+    define query(self, name: String) -> String {
+        if self.request == null or not self.request.query.has(name) { return "" }
+        return _text(self.request.query[name])
+    }
+
+    define _start(self) -> void {
+        self.on_load()
+    }
+
+    define render(self) -> String {
+        b := _Build()
+        out := b.render(self.build())
+        self._widgets = b.widgets
+        return out
+    }
+
+    define _widget(self, text: String) -> Widget {
+        i := 1
+        while self._widgets.has("w" + String(i)) {
+            w: Widget = self._widgets["w" + String(i)]
+            if w._label() == text { return w }
+            i = i + 1
+        }
+        return null
+    }
+
+    define handle(self, event: String, data: Map) -> void {
+        at := event.find(":")
+        if at < 0 { return }
+        id := event.substring(0, at)
+        if not self._widgets.has(id) { return }
+        w: Widget = self._widgets[id]
+        w._event(event.substring(at + 1, event.length()), data)
     }
 }
 
@@ -171,12 +857,14 @@ _client_js := """(function () {
     else if ('value' in el && el.type !== 'submit' && el.type !== 'button') d.value = el.value;
     return d;
   }
-  function send(el, event, data) {
+  var queue = Promise.resolve(), forced = null;
+  function send(el, event, data, force) {
     var root = rootOf(el);
     if (!root || !event) return;
-    post('/_live/event', { id: root.getAttribute('q-root'), event: event, data: data })
-      .then(function (res) { apply(root, res); })
-      .catch(function (err) { console.error('live:', err); });
+    queue = queue.then(function () {
+      return post('/_live/event', { id: root.getAttribute('q-root'), event: event, data: data })
+        .then(function (res) { forced = force || null; apply(root, res); forced = null; });
+    }).catch(function (err) { forced = null; console.error('live:', err); });
   }
   function apply(root, res) {
     if (res.reload) { location.reload(); return; }
@@ -201,7 +889,7 @@ _client_js := """(function () {
     if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.parentNode.replaceChild(b.cloneNode(true), a); return; }
     if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
     if (a.nodeType !== 1) return;
-    var i, name, focused = a === document.activeElement;
+    var i, name, focused = a === document.activeElement && a !== forced;
     for (i = a.attributes.length - 1; i >= 0; i--) { name = a.attributes[i].name; if (!b.hasAttribute(name)) a.removeAttribute(name); }
     for (i = 0; i < b.attributes.length; i++) { name = b.attributes[i].name; if (a.getAttribute(name) !== b.attributes[i].value) a.setAttribute(name, b.attributes[i].value); }
     if (a.nodeName === 'INPUT') {
@@ -225,32 +913,38 @@ _client_js := """(function () {
       return;
     }
     var el = e.target.closest ? e.target.closest('[q-click]') : null;
-    if (el) { e.preventDefault(); send(el, el.getAttribute('q-click'), dataOf(el)); }
+    if (el) { e.preventDefault(); flush(); send(el, el.getAttribute('q-click'), dataOf(el)); }
   });
   document.addEventListener('submit', function (e) {
     var f = e.target.closest ? e.target.closest('form[q-submit]') : null;
     if (!f) return;
     e.preventDefault();
+    flush();
     var d = {};
     new FormData(f).forEach(function (v, k) { d[k] = String(v); });
-    send(f, f.getAttribute('q-submit'), d);
+    send(f, f.getAttribute('q-submit'), d, document.activeElement);
   });
   var timers = {};
+  function flush() {
+    var k, t;
+    for (k in timers) { t = timers[k]; delete timers[k]; clearTimeout(t.id); t.run(); }
+  }
   document.addEventListener('input', function (e) {
     var el = e.target.closest ? e.target.closest('[q-input]') : null;
     if (!el) return;
     var key = el.getAttribute('q-input');
-    clearTimeout(timers[key]);
-    timers[key] = setTimeout(function () { send(el, key, dataOf(el)); }, 150);
+    if (timers[key]) clearTimeout(timers[key].id);
+    var run = function () { send(el, key, dataOf(el)); };
+    timers[key] = { run: run, id: setTimeout(function () { delete timers[key]; run(); }, 150) };
   });
   document.addEventListener('change', function (e) {
     var el = e.target.closest ? e.target.closest('[q-change]') : null;
-    if (el) send(el, el.getAttribute('q-change'), dataOf(el));
+    if (el) { flush(); send(el, el.getAttribute('q-change'), dataOf(el)); }
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
     var el = e.target.closest ? e.target.closest('[q-enter]') : null;
-    if (el) { e.preventDefault(); send(el, el.getAttribute('q-enter'), dataOf(el)); }
+    if (el) { e.preventDefault(); flush(); send(el, el.getAttribute('q-enter'), dataOf(el), el); }
   });
   function navigate(path, push) {
     fetch('/_live/nav?path=' + encodeURIComponent(path))
@@ -270,7 +964,7 @@ _client_js := """(function () {
 })();
 """
 
-// ===== pages =====
+// ===== serving =====
 
 // [pattern Route, factory] per live page, for navigation without a reload.
 _pages := []
@@ -324,6 +1018,7 @@ define _make(factory: Callable, req: web.Request) -> Component {
     if comp == null { throw web.HttpError(500, "live: the page factory returned null") }
     comp.request = req
     _store(comp)
+    comp._start()
     return comp
 }
 
@@ -336,8 +1031,13 @@ define _page_html(comp: Component) -> String {
 }
 
 define _install(app: web.App) -> void {
+    _install_on(app._router)
+}
+
+// The /_live/ endpoints, once per router.
+define _install_on(app: web.Router) -> void {
     for a in _installed {
-        known: web.App = a
+        known: web.Router = a
         if known == app { return }
     }
     _installed.append(app)
@@ -388,6 +1088,42 @@ define _install(app: web.App) -> void {
         }
         rs.json({"reload": true})                  // not a live page: load it normally
     })
+}
+
+---
+The app's live pages, in one place (a `router.qk`, say):
+
+    from live use { Router }
+    from src.counter use { CounterPage }
+    from src.todos use { TodoPage }
+
+    router := Router()
+    router.add("/", CounterPage)
+    router.add("/todos", TodoPage)
+    router.add("/users/:id", UserPage)       // self.param("id") in the page
+
+and in the app, `app.mount("/", router)`. It's a `web.Router`, so it can
+hold ordinary routes too (`router.get("/api/items", handler)`). Mount it
+at "/" (the browser script talks to /_live/).
+---
+struct Router : web.Router {
+    define __init(self) -> void {
+        super().__init()
+    }
+
+    --- Serve the page struct `page` (its name: `router.add("/", HomePage)`) at `path`. ---
+    define add(self, path: String, page: Callable) -> Router {
+        _install_on(self)
+        make := fn(req) { return page() }
+        _pages.append([web.Route("GET", path, make), make])
+        self.get(path, fn(req, res) {
+            r: web.Request = req
+            rs: web.Response = res
+            comp := _make(make, r)
+            rs.html(_page_html(comp))
+        })
+        return self
+    }
 }
 
 // ===== testing =====
@@ -446,6 +1182,39 @@ struct TestSession {
         if m.has("html") { self.html = String(m["html"]) }
         if m.has("title") { self.title = String(m["title"]) }
         return self
+    }
+
+    --- Click the button (or other widget) labelled `text` on a live.Page. ---
+    define click(self, text: String) -> TestSession {
+        return self._fire(text, "click", "")
+    }
+
+    --- Type `value` into the text field whose placeholder is `placeholder`. ---
+    define type(self, placeholder: String, value: String) -> TestSession {
+        return self._fire(placeholder, "change", value)
+    }
+
+    --- Type `value` into the text field with `placeholder` and press Enter. ---
+    define submit(self, placeholder: String, value: String) -> TestSession {
+        return self._fire(placeholder, "submit", value)
+    }
+
+    --- Tick (`on` true) or untick the checkbox labelled `text`. ---
+    define check(self, text: String, on: Bool = true) -> TestSession {
+        return self._fire(text, "change", on ? "true" : "false")
+    }
+
+    --- Pick option `index` of the dropdown whose first option is `first`. ---
+    define choose(self, first: String, index: Int) -> TestSession {
+        return self._fire(first, "change", String(index))
+    }
+
+    define _fire(self, label: String, kind: String, value: String) -> TestSession {
+        comp := _find(self.id)
+        if comp == null { throw ValueError("live.TestSession: no page open") }
+        w := comp._widget(label)
+        if w == null { throw ValueError("live.TestSession: nothing labelled '" + label + "' on the page") }
+        return self.send(w._on(kind), {"value": value})
     }
 
     --- Follow a `q-link` to `path`. ---

@@ -1,0 +1,79 @@
+use live
+from src.nav use { nav }
+
+struct TodoPage : live.Page {
+    items: List
+    draft: String
+    filter: String
+
+    define on_load(self) -> void {
+        // Load from a database or an API here.
+        self.items = ["buy milk", "write docs"]
+        self.draft = ""
+        self.filter = ""
+    }
+
+    define build(self) -> live.Widget {
+        rows := []
+        i := 0
+        for it in self.items {
+            text: String = it
+            if self.filter == "" or text.contains(self.filter) { rows.append(TodoRow(self, i, text)) }
+            i = i + 1
+        }
+        if rows.length() == 0 { rows.append("Nothing here") }
+        return live.Column([
+            nav(),
+            live.Heading("Todos"),
+            live.Row([
+                live.TextInput(self.draft, placeholder="Something to do",
+                               on_change=fn(text) { self.draft = text },
+                               on_submit=fn(text) { self.add(text) }),
+                live.Button("Add", on_click=fn() { self.add(self.draft) }),
+            ]),
+            live.TextInput(self.filter, placeholder="Search", on_change=fn(text) { self.filter = text }),
+            live.ListView(rows),
+        ])
+    }
+
+    define add(self, text: String) -> void {
+        t := text.trim()
+        if t != "" { self.items.append(t) }
+        self.draft = ""
+    }
+
+    define remove(self, index: Int) -> void {
+        kept := []
+        j := 0
+        for it in self.items {
+            if j != index { kept.append(it) }
+            j = j + 1
+        }
+        self.items = kept
+    }
+
+    define title(self) -> String {
+        return "Todos (" + String(self.items.length()) + ")"
+    }
+}
+
+// One line of the list: its text and a button to remove it.
+struct TodoRow : live.Widget {
+    page: TodoPage
+    index: Int
+    text: String
+
+    define __init(self, page: TodoPage, index: Int, text: String) -> void {
+        super().__init()
+        self.page = page
+        self.index = index
+        self.text = text
+    }
+
+    define build(self) -> live.Widget {
+        return live.Row([
+            live.Label(self.text),
+            live.Button("×", on_click=fn() { self.page.remove(self.index) }),
+        ])
+    }
+}

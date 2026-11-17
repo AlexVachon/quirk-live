@@ -1,0 +1,14 @@
+use live
+from src.nav use { nav }
+
+struct HelloPage : live.Page {
+    name: String
+
+    define on_load(self) -> void {
+        self.name = self.param("name")          // from /hello/:name
+    }
+
+    define build(self) -> live.Widget {
+        return live.Column([nav(), live.Heading("Hello, " + self.name + "!")])
+    }
+}

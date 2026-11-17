@@ -1,0 +1,15 @@
+// The live demo app: quirk run main.qk, then open http://localhost:3000
+use web
+use live
+use sys
+from router use { router }
+
+define main() -> void {
+    live.configure(head="<link rel=\"stylesheet\" href=\"/style.css\">")
+    app := web.App()
+    app.use(web.static("public"))
+    app.mount("/", router)
+    port := 3000
+    if sys.getenv("PORT") != "" { port = Int(sys.getenv("PORT")) }
+    app.listen(port)
+}

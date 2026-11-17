@@ -1,0 +1,11 @@
+// Every page of the app, in one place.
+from live use { Router }
+from src.counter use { CounterPage }
+from src.todos use { TodoPage }
+from src.hello use { HelloPage }
+
+router = Router()
+
+router.add("/", CounterPage)
+router.add("/todos", TodoPage)
+router.add("/hello/:name", HelloPage)
