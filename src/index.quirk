@@ -397,10 +397,8 @@ _notes_css := """<style>
 @keyframes q-note-time { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .q-note-right-enter { animation: q-note-in-right .3s ease-out; }
 .q-note-left-enter { animation: q-note-in-left .3s ease-out; }
-.q-note-right-leave, .q-note-left-leave { animation: q-note-out .3s ease-in forwards; }
 @keyframes q-note-in-right { from { opacity: 0; transform: translateX(100%); } }
 @keyframes q-note-in-left { from { opacity: 0; transform: translateX(-100%); } }
-@keyframes q-note-out { to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .q-note-right-enter, .q-note-left-enter, .q-note-right-leave, .q-note-left-leave { animation-duration: .01s; } }
 </style>"""
 
@@ -2232,10 +2230,19 @@ _client_js := """(function () {
     var parts = name ? [n] : [].slice.call(inside), i, left = parts.length;
     for (i = 0; i < parts.length; i++) {
       (function (el) {
-        var nm = el.getAttribute('q-transition');
+        var nm = el.getAttribute('q-transition'), anim;
         el.setAttribute('q-leaving', '');
         el.classList.remove(nm + '-enter');
         el.classList.add(nm + '-leave');
+        // No name-leave animation in the CSS: the entrance, played backwards.
+        anim = window.getComputedStyle ? window.getComputedStyle(el).animationName : '';
+        if (!anim || anim === 'none') {
+          el.classList.remove(nm + '-leave');
+          void el.offsetWidth;
+          el.style.animationDirection = 'reverse';
+          el.style.animationFillMode = 'forwards';
+          el.classList.add(nm + '-enter');
+        }
         el.addEventListener('animationend', function () { if (--left === 0) done(); }, { once: true });
       })(parts[i]);
     }
@@ -2421,7 +2428,7 @@ _client_js := """(function () {
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.2.1-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.2.2-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====

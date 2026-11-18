@@ -196,14 +196,18 @@ The counter page in `examples/app` uses every option.
 
 What notifications use works for any element of a component:
 `q-transition="fade"` gives it the class `fade-enter` when it appears and
-`fade-leave` when it goes — it's removed when that animation ends — so the
-CSS is
+`fade-leave` when it goes — it's removed when that animation ends. Without a
+`fade-leave` animation, it leaves with its entrance played backwards, so
+this is enough:
 
 ```css
 .fade-enter { animation: fade-in .2s; }
-.fade-leave { animation: fade-in .2s reverse forwards; }
 @keyframes fade-in { from { opacity: 0; } }
 ```
+
+Notifications close with their entrance reversed (they slide back out);
+give `.q-note-right-leave` / `.q-note-left-leave` an animation for another
+way out.
 
 `q-pause-hover` on an element with `@after` stops its timer while the mouse
 is on it.

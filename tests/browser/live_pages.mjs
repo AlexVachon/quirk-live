@@ -93,7 +93,9 @@ check(note('in one go').getAttribute('q-transition') === 'q-note-left', 'left co
 const success = note('You reached 10!');
 success.dispatchEvent(new w.MouseEvent('mouseover', { bubbles: true }));
 // Leave: the bottom-left one (2.5 s) closes; it stays a moment with q-note-left-leave.
-check(await until(() => d().querySelector('[q-leaving].q-note-left-leave'), 4000), 'a closing one gets its leave transition');
+// (no q-note-left-leave animation in the CSS: the entrance, reversed)
+check(await until(() => { const e = d().querySelector('.q-notification[q-leaving]'); return e && e.classList.contains('q-note-left-enter') && e.style.animationDirection === 'reverse'; }, 4000),
+      'a closing one leaves with its entrance played backwards');
 check(await until(() => !d().querySelector('.q-notifications-bottom-left .q-notification'), 2500), 'then it is removed');
 await sleep(3000);
 check(note('You reached 10!') === success, 'hovered: the success one is still there after its 4.5 s');
