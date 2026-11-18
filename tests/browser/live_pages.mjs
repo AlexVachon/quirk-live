@@ -75,5 +75,35 @@ check(await until(() => !d().querySelector('ul').textContent.includes('buy milk'
 w.history.back();
 check(await until(() => !!d().querySelector('.count')), 'Back: the counter page again');
 
+// Notifications: @after timers in the browser, enum props, emit.
+[...d().querySelectorAll('a[q-link]')].find(a => a.getAttribute('href') === '/notifications')
+  .dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+const notes = () => [...d().querySelectorAll('.notification')];
+check(await until(() => notes().length === 1), 'notifications page: the welcome one');
+check(notes()[0].classList.contains('info') && notes()[0].getAttribute('role') === 'status', 'Info: class and role');
+button('Error (stays)').click();
+check(await until(() => notes().length === 2), 'an error notification appears');
+const err = () => notes().find(n => n.classList.contains('error'));
+check(err() && err().getAttribute('role') === 'alert', 'Error: role=alert');
+// A custom one that closes after 400 ms.
+type(input('Your message'), 'quick one');
+const number = d().querySelector('input[type=number]');
+type(number, '400');
+const sel = d().querySelector('select');
+sel.value = 'Success';
+sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+d().querySelector('form.custom').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+check(await until(() => notes().some(n => n.textContent.includes('quick one'))), 'the custom one appears');
+check(notes().find(n => n.textContent.includes('quick one')).classList.contains('success'), 'with the status picked');
+const welcome = () => notes().find(n => n.textContent.includes('Welcome'));
+const errBefore = err();
+check(await until(() => !notes().some(n => n.textContent.includes('quick one')), 2500), 'it closes by itself after its timeout');
+check(!!welcome(), 'the welcome one (6 s) is still there');
+check(err() === errBefore, 'the error one is the same element');
+await sleep(500);
+check(!!err(), 'the error one (timeout 0) stays');
+err().querySelector('button.close').click();
+check(await until(() => !err()), '× closes it (emit dismiss → the page removes it)');
+
 console.log(failures ? failures + ' failed' : 'all passed');
 process.exit(failures ? 1 : 0);

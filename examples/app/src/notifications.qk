@@ -1,0 +1,129 @@
+use live
+
+enum NotificationStatus {
+    Info
+    Success
+    Warning
+    Error
+}
+
+---
+A message that closes itself after `timeout` milliseconds (0: it stays
+until closed). Tells its parent with `emit("dismiss")`.
+
+    <Notification message="Saved" status="Success" :timeout="3000" @dismiss="remove(id)" />
+---
+struct Notification : live.Component {
+    message: String
+    title: String
+    status: NotificationStatus
+    timeout: Int
+
+    define icon(self) -> String {
+        if self.status == NotificationStatus.Success { return "✓" }
+        if self.status == NotificationStatus.Warning { return "!" }
+        if self.status == NotificationStatus.Error { return "✕" }
+        return "i"
+    }
+
+    // Errors and warnings interrupt a screen reader; the others wait.
+    define role(self) -> String {
+        if self.status == NotificationStatus.Error or self.status == NotificationStatus.Warning { return "alert" }
+        return "status"
+    }
+
+    define dismiss(self) -> void {
+        self.emit("dismiss")
+    }
+
+    define template(self) -> String {
+        return r"""
+            <div class="notification {{ status.lower }}" role="{{ role }}" @after="dismiss" delay="{{ timeout }}">
+              <span class="icon" aria-hidden="true">{{ icon }}</span>
+              <div class="body">
+                {% if title %}<strong>{{ title }}</strong>{% end %}
+                <p>{{ message }}</p>
+              </div>
+              <button class="close" @click="dismiss" aria-label="Close">×</button>
+              {% if timeout > 0 %}<div class="time-left" style="animation-duration: {{ timeout }}ms"></div>{% end %}
+            </div>
+        """
+    }
+}
+
+// A page to try them: one button per status, and a form for your own.
+struct NotificationsPage : live.Page {
+    items: List
+    next_id: Int
+    draft: String
+    draft_status: String
+    draft_timeout: Int
+
+    define on_load(self) -> void {
+        self.items = []
+        self.next_id = 1
+        self.draft = ""
+        self.draft_status = "Info"
+        self.draft_timeout = 5000
+        self.notify("Info", "Welcome! Notifications close by themselves.", 6000, "Hello")
+    }
+
+    define notify(self, status: String, message: String, timeout: Int = 4000, title: String = "") -> void {
+        self.items.append({"id": self.next_id, "status": status, "message": message, "timeout": timeout, "title": title})
+        self.next_id = self.next_id + 1
+    }
+
+    define custom(self) -> void {
+        text := self.draft.trim()
+        if text == "" { return }
+        self.notify(self.draft_status, text, self.draft_timeout)
+        self.draft = ""
+    }
+
+    define remove(self, id: Int) -> void {
+        kept := []
+        for it in self.items {
+            n: Map = it
+            if Int(n["id"]) != id { kept.append(n) }
+        }
+        self.items = kept
+    }
+
+    define clear(self) -> void {
+        self.items = []
+    }
+
+    define title(self) -> String {
+        return "Notifications (" + String(self.items.length()) + ")"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Notifications</h1>
+            <div class="buttons">
+              <button @click="notify('Info', 'Something happened.')">Info</button>
+              <button @click="notify('Success', 'Your changes were saved.', 3000, 'Saved')">Success</button>
+              <button @click="notify('Warning', 'Your session ends in 5 minutes.', 8000)">Warning</button>
+              <button @click="notify('Error', 'The server could not be reached.', 0, 'Connection lost')">Error (stays)</button>
+              <button @click="clear">Clear all</button>
+            </div>
+            <form class="custom" @submit="custom">
+              <input model="draft" placeholder="Your message">
+              <select model="draft_status">
+                <option value="Info">Info</option>
+                <option value="Success">Success</option>
+                <option value="Warning">Warning</option>
+                <option value="Error">Error</option>
+              </select>
+              <label>closes after <input type="number" model="draft_timeout" min="0" step="500"> ms</label>
+              <button>Show</button>
+            </form>
+            <div class="notifications" aria-live="polite">
+              {% for n in items %}
+                <Notification :key="n.id" message="{{ n.message }}" title="{{ n.title }}"
+                              :status="n.status" :timeout="n.timeout" @dismiss="remove(n.id)" />
+              {% end %}
+            </div>
+        """
+    }
+}

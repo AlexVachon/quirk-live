@@ -101,7 +101,9 @@ define main() -> void {
 ```
 
 `quirk new --live myapp` makes such a project. The demo — a counter, a todo
-list with live search, navigation — is in `examples/app`:
+list with live search, notifications that close themselves, navigation — is
+in `examples/app` (`src/notifications.qk` is a complete component: an enum
+status, an icon, a timeout, a close button):
 `cd examples/app && quirk run main.qk`, then open http://localhost:3000.
 
 ## Components
@@ -134,6 +136,7 @@ are re-read when they change.
 | `<button @click="save">` | calls `self.save()`; `@click="add(1)"` with arguments (evaluated when shown) |
 | `@submit="save"` (a form) | `save(fields)` — a Map of the form's fields |
 | `@input="search"` · `@change="pick"` · `@enter="send"` | `search(text)` while typing · on a change · on Enter |
+| `<div @after="dismiss" delay="{{ timeout }}">` | `dismiss()` once, `delay` milliseconds after the element appears (`0`: never) |
 | `<input model="draft">` | the field shows `self.draft` and sets it as you type (checkboxes: a Bool; `<select model=…>` too) |
 | `:disabled="busy"` · `:href="link"` | an attribute from an expression (a Bool adds or leaves it out) |
 | `title="Hi {{ name }}"` | `{{ }}` works in attributes |
@@ -146,7 +149,9 @@ content, `<Card title="…">…</Card>`.
 
 - **Props**: `text="Hi {{ name }}"` sets the child's `text` field (text,
   converted to the field's type); `:count="n + 1"` sets it to a value
-  (Lists, structs, `self`…).
+  (Lists, structs, `self`…). An enum field takes a variant's name
+  (`status="Error"`), and shows as one (`{{ status }}`,
+  `{% if status == "Error" %}`).
 - **Events**: `@remove="remove"` runs the parent's `remove(value)` when the
   child calls `self.emit("remove", value)`.
 - **Slots**: a `<slot />` in the child's template shows what its tag enclosed
@@ -189,6 +194,7 @@ define test_counter() -> void {
     s.check("Done only")                 // a checkbox, by its label
     s.choose("high")                     // a <select>'s option
     s.submit_form("text", {"text": "eggs"})
+    s.run_timers()                       // every @after on the page, now
 }
 ```
 
@@ -246,8 +252,8 @@ served with `live.page(app, "/", fn(req) { return Counter() })`.
 
 ## Requirements
 
-Quirk 7.44.0 or newer (run-time reflection, raw strings, a page struct
-passed by name to `router.add`), and the `web` package (bundled with Quirk).
+Quirk 7.44.1 or newer (run-time reflection, enum fields by name, raw
+strings, a page struct passed by name to `router.add`), and the `web` package (bundled with Quirk).
 
 ## License
 

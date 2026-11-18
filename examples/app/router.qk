@@ -3,9 +3,11 @@ from live use { Router }
 from src.counter use { CounterPage }
 from src.todos use { TodoPage }
 from src.hello use { HelloPage }
+from src.notifications use { NotificationsPage }
 
 router = Router()
 
 router.add("/", CounterPage)
 router.add("/todos", TodoPage)
 router.add("/hello/:name", HelloPage)
+router.add("/notifications", NotificationsPage)

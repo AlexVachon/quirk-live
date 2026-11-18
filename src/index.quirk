@@ -81,6 +81,7 @@ named after the struct (`counter_page.html`) next to the `.qk` file:
     <h1>Count: {{ count }}</h1>
     <button @click="add(1)">+1</button>         calls self.add(1)
     <input model="draft" @enter="save">         self.draft follows the field; Enter calls self.save(text)
+    <div @after="close" delay="3000">           calls self.close() 3 s after it appears
     <PlusButton :page="self" />                 another component, by its struct's name
     {% if count >= 10 %}<p>a lot</p>{% end %}
     {% for i, item in items %}<li>{{ item }}</li>{% else %}<li>none</li>{% end %}
@@ -909,7 +910,7 @@ define _register(ctx: _Ctx, h: List) -> String {
     return id
 }
 
-_events := {"click": "q-click", "submit": "q-submit", "input": "q-input", "change": "q-change", "enter": "q-enter"}
+_events := {"click": "q-click", "submit": "q-submit", "input": "q-input", "change": "q-change", "enter": "q-enter", "after": "q-after"}
 
 define _render_tag(node: _TNode, ctx: _Ctx) -> String {
     out := "<" + node.text
@@ -928,7 +929,7 @@ define _render_tag(node: _TNode, ctx: _Ctx) -> String {
         has_value: Bool = at[2]
         if name.startswith("@") {
             ev := name.substring(1, name.length())
-            if not _events.has(ev) { _tfail("unknown event @" + ev + " (use @click, @submit, @input, @change or @enter)") }
+            if not _events.has(ev) { _tfail("unknown event @" + ev + " (use @click, @submit, @input, @change, @enter or @after)") }
             q: String = _events[ev]
             if not events.has(q) { events[q] = [] }
             ids: List = events[q]
@@ -970,6 +971,13 @@ define _render_tag(node: _TNode, ctx: _Ctx) -> String {
                 attrs = attrs + " selected"
             }
         }
+    }
+    // @after: the browser runs it `delay` ms after the element appears. The
+    // timer belongs to this component (its key), not to a DOM position.
+    if events.has("q-after") {
+        n := ctx.counts.has("@after") ? Int(ctx.counts["@after"]) : 0
+        ctx.counts["@after"] = n + 1
+        attrs = attrs + " q-after-key=\"" + web.escape(ctx.key + "@" + String(n)) + "\""
     }
     for q in events.keys() {
         qn: String = q
@@ -1961,6 +1969,7 @@ _client_js := """(function () {
     if (res.redirect) { navigate(res.redirect, true); return; }
     if (typeof res.html === 'string') morph(root, res.html);
     if (res.title) document.title = res.title;
+    startTimers();
   }
   function morph(root, html) {
     var t = document.createElement('div');
@@ -2036,6 +2045,24 @@ _client_js := """(function () {
     var el = e.target.closest ? e.target.closest('[q-enter]') : null;
     if (el) { e.preventDefault(); flush(); send(el, el.getAttribute('q-enter'), dataOf(el), el); }
   });
+  // @after timers, by key: started when an element with q-after first
+  // appears, fired once with its current handler (if it's still there).
+  var afterTimers = {}, afterDone = {};
+  function startTimers() {
+    var els = document.querySelectorAll('[q-after][q-after-key]'), i;
+    for (i = 0; i < els.length; i++) {
+      (function (key, ms) {
+        if (afterTimers[key] || afterDone[key] || !(ms > 0)) return;
+        afterTimers[key] = setTimeout(function () {
+          delete afterTimers[key];
+          afterDone[key] = true;
+          var all = document.querySelectorAll('[q-after-key]'), j, el = null;
+          for (j = 0; j < all.length; j++) if (all[j].getAttribute('q-after-key') === key) el = all[j];
+          if (el) { flush(); send(el, el.getAttribute('q-after'), {}); }
+        }, ms);
+      })(els[i].getAttribute('q-after-key'), parseInt(els[i].getAttribute('delay') || '0', 10));
+    }
+  }
   function navigate(path, push) {
     fetch('/_live/nav?path=' + encodeURIComponent(path))
       .then(function (r) { return r.json(); })
@@ -2043,7 +2070,9 @@ _client_js := """(function () {
         var root = document.querySelector('[q-root]');
         if (res.reload || !res.id || !root) { location.href = path; return; }
         root.setAttribute('q-root', res.id);
+        afterDone = {};
         morph(root, res.html);
+        startTimers();
         if (res.title) document.title = res.title;
         if (push) history.pushState({}, '', path);
         window.scrollTo(0, 0);
@@ -2051,6 +2080,8 @@ _client_js := """(function () {
       .catch(function () { location.href = path; });
   }
   window.addEventListener('popstate', function () { navigate(location.pathname + location.search, false); });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startTimers);
+  else startTimers();
 })();
 """
 
@@ -2378,6 +2409,44 @@ struct TestSession {
         sel := before.split("<select")
         tag: String = sel[sel.length() - 1]
         return self.send(_attr_of(tag, "q-change", option), {"value": value})
+    }
+
+    --- Run every `@after` timer on the page now, once each (as if its delay had passed; `delay="0"`: never). ---
+    define run_timers(self) -> TestSession {
+        fired := {}
+        while true {
+            next_key := ""
+            next_id := ""
+            parts := self.html.split("q-after-key=\"")
+            i := 1
+            while i < parts.length() and next_key == "" {
+                p: String = parts[i]
+                key := p.substring(0, p.find("\""))
+                at := p.find("q-after=\"")
+                // the tag's start (before q-after-key): its delay= ("0": never)
+                before: String = parts[i - 1]
+                opens := before.split("<")
+                tag_start: String = opens[opens.length() - 1]
+                d := tag_start.find(" delay=\"")
+                delay := 0
+                if d >= 0 {
+                    dv := tag_start.substring(d + 8, tag_start.length())
+                    text := dv.substring(0, dv.find("\""))
+                    if text != "" { delay = Int(text) }
+                }
+                if delay <= 0 { fired[key] = true }
+                if not fired.has(key) and at >= 0 {
+                    rest := p.substring(at + 9, p.length())
+                    next_key = key
+                    next_id = rest.substring(0, rest.find("\""))
+                }
+                i = i + 1
+            }
+            if next_key == "" { return self }
+            fired[next_key] = true
+            self.send(next_id, {})
+        }
+        return self
     }
 
     --- Submit the form holding the field with `placeholder` (or name), with `fields`. ---
