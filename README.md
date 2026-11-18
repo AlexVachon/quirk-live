@@ -101,10 +101,8 @@ define main() -> void {
 ```
 
 `quirk new --live myapp` makes such a project. The demo — a counter, a todo
-list with live search, notifications that close themselves, navigation — is
-in `examples/app`: pages in `src/pages/`, components in `src/components/`
-(`components/notification` is a complete one: an enum status, an icon, a
-timeout, a close button; the counter page shows them):
+list with live search, notifications, navigation — is in `examples/app`
+(pages in `src/pages/`):
 `cd examples/app && quirk run main.qk`, then open http://localhost:3000.
 
 ## Components
@@ -161,6 +159,54 @@ content, `<Card title="…">…</Card>`.
   object), and `on_load` runs once when it first appears. Children in a
   `{% for %}` are matched by position; give them `:key="item.id"` when the
   list's order changes.
+
+## Notifications
+
+Like Element Plus's `ElNotification`: call `notify` from any page or
+component, nothing to put in the template — live shows it in a corner of the
+page, slides it in, and closes it after a while.
+
+```quirk
+define save(self) -> void {
+    // ...
+    self.notify("Your changes were saved.", title="Saved", type="success")
+}
+```
+
+| Option | |
+|---|---|
+| `message` | the text |
+| `title=""` | in bold above it |
+| `type=""` | `"success"`, `"warning"`, `"info"`, `"error"` (an icon and a color; errors and warnings are read out at once by screen readers) |
+| `position="top-right"` | `"top-left"`, `"bottom-right"`, `"bottom-left"`; they stack in their corner |
+| `duration=4500` | milliseconds before it closes; `0`: until closed. The timer pauses while the mouse is on it |
+| `show_close=true` | the × button |
+| `icon=""` | instead of the type's |
+| `on_click=fn() {...}` | when it's clicked |
+| `on_close=fn() {...}` | when it closes (×, its timer, or `close_notification`) |
+
+`notify` returns the notification's id: `self.close_notification(id)`,
+`self.close_notifications()` close them. The look is plain CSS
+(`.q-notification`, `.q-notification-success`, `.q-notifications-top-right`,
+…) added to every page; override it in your stylesheet.
+
+The counter page in `examples/app` uses every option.
+
+### Transitions, for your own components
+
+What notifications use works for any element of a component:
+`q-transition="fade"` gives it the class `fade-enter` when it appears and
+`fade-leave` when it goes — it's removed when that animation ends — so the
+CSS is
+
+```css
+.fade-enter { animation: fade-in .2s; }
+.fade-leave { animation: fade-in .2s reverse forwards; }
+@keyframes fade-in { from { opacity: 0; } }
+```
+
+`q-pause-hover` on an element with `@after` stops its timer while the mouse
+is on it.
 
 ## The base page
 
@@ -255,7 +301,8 @@ served with `live.page(app, "/", fn(req) { return Counter() })`.
 ## Requirements
 
 Quirk 7.44.1 or newer (run-time reflection, enum fields by name, raw
-strings, a page struct passed by name to `router.add`), and the `web` package (bundled with Quirk).
+strings, `type=` as an argument name, a page struct passed by name to
+`router.add`), and the `web` package (bundled with Quirk).
 
 ## License
 

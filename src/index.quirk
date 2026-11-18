@@ -109,6 +109,8 @@ struct Component {
     _seen: Map
     _listeners: Map
     _next: Int
+    _notes: List          // the root's notifications (live.notify)
+    _note_next: Int
 
     define __init(self) -> void {
         self.id = ""
@@ -121,6 +123,8 @@ struct Component {
         self._seen = {}
         self._listeners = {}
         self._next = 0
+        self._notes = []
+        self._note_next = 1
     }
 
     --- Set up the component's state (override). Runs once, before it's first shown. ---
@@ -163,6 +167,53 @@ struct Component {
         _run_handler(h, value, value != null)
     }
 
+    ---
+    Show a notification in a corner of the page, like Element Plus's
+    ElNotification — from any page or component, nothing to put in the
+    template. Returns its id (for `close_notification`).
+
+    - `type`: "success", "warning", "info", "error" or "" (none)
+    - `position`: "top-right" (default), "top-left", "bottom-right", "bottom-left"
+    - `duration`: milliseconds before it closes (0: stays until closed);
+      the timer pauses while the mouse is on it
+    - `show_close`: the × button; `icon`: instead of the type's
+    - `on_click()`: when it's clicked; `on_close()`: when it closes (×,
+      timeout or close_notification)
+    ---
+    define notify(self, message: String, title: String = "", type: String = "", position: String = "top-right",
+                  duration: Int = 4500, show_close: Bool = true, icon: String = "",
+                  on_click: Callable = null, on_close: Callable = null) -> Int {
+        root := self._root_of()
+        if root._notes == null { root._notes = [] }
+        if root._note_next == 0 { root._note_next = 1 }
+        n := _Note(root._note_next, message, title, type, position, duration, show_close, icon, on_click, on_close)
+        root._note_next = root._note_next + 1
+        root._notes.append(n)
+        return n.id
+    }
+
+    --- Close notification `id` (its `on_close` runs). ---
+    define close_notification(self, id: Int) -> void {
+        _close_note(self._root_of(), id, true)
+    }
+
+    --- Close every notification. ---
+    define close_notifications(self) -> void {
+        root := self._root_of()
+        if root._notes == null { return }
+        ids := []
+        for it in root._notes {
+            n: _Note = it
+            ids.append(n.id)
+        }
+        for i in ids { _close_note(root, Int(i), true) }
+    }
+
+    define _root_of(self) -> Component {
+        if self._root != null and self._root != self { return self._root }
+        return self
+    }
+
     --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
     define param(self, name: String) -> String {
         r := self._request()
@@ -195,9 +246,164 @@ struct Component {
 
     // The component wrapped in its root element (what the page holds).
     define _root_html(self) -> String {
-        return "<div q-root=\"" + self.id + "\">" + self.render() + "</div>"
+        return "<div q-root=\"" + self.id + "\">" + _body(self) + "</div>"
     }
 }
+
+// ===== notifications (Component.notify) =====
+
+struct _Note {
+    id: Int
+    message: String
+    title: String
+    type: String
+    position: String
+    duration: Int
+    show_close: Bool
+    icon: String
+    on_click: Callable
+    on_close: Callable
+
+    define __init(self, id: Int, message: String, title: String, type: String, position: String,
+                  duration: Int, show_close: Bool, icon: String, on_click: Callable, on_close: Callable) -> void {
+        self.id = id
+        self.message = message
+        self.title = title
+        self.type = type
+        self.position = position
+        self.duration = duration
+        self.show_close = show_close
+        self.icon = icon
+        self.on_click = on_click
+        self.on_close = on_close
+    }
+}
+
+_note_positions := ["top-right", "top-left", "bottom-right", "bottom-left"]
+_note_icons := {"success": "✓", "warning": "!", "info": "i", "error": "✕"}
+
+// What the page shows: the component, then its notifications.
+define _body(comp: Component) -> String {
+    return comp.render() + _notes_html(comp)
+}
+
+define _known_position(p: String) -> Bool {
+    for it in _note_positions {
+        known: String = it
+        if known == p { return true }
+    }
+    return false
+}
+
+define _notes_html(root: Component) -> String {
+    if root._notes == null or root._notes.length() == 0 { return "" }
+    out := ""
+    for p in _note_positions {
+        pos: String = p
+        items := ""
+        for it in root._notes {
+            n: _Note = it
+            corner := _known_position(n.position) ? n.position : "top-right"
+            if corner == pos { items = items + _note_html(root, n) }
+        }
+        if items != "" { out = out + "<div class=\"q-notifications q-notifications-" + pos + "\" q-key=\"q-notes-" + pos + "\">" + items + "</div>" }
+    }
+    return out
+}
+
+define _note_html(root: Component, n: _Note) -> String {
+    ev := "_note:" + String(n.id) + ":"
+    side := n.position.endswith("left") ? "left" : "right"
+    role := (n.type == "error" or n.type == "warning") ? "alert" : "status"
+    kind := n.type == "" ? "" : " q-notification-" + web.escape(n.type)
+    out := "<div class=\"q-notification" + kind + (n.on_click != null ? " q-notification-clickable" : "") + "\" role=\"" + role + "\""
+    out = out + " q-key=\"q-note-" + String(n.id) + "\" q-transition=\"q-note-" + side + "\" q-pause-hover"
+    if n.duration > 0 {
+        out = out + " delay=\"" + String(n.duration) + "\" q-after-key=\"" + web.escape(root.id) + "-note-" + String(n.id) + "\" q-after=\"" + ev + "after\""
+    }
+    if n.on_click != null { out = out + " q-click=\"" + ev + "click\"" }
+    out = out + ">"
+    icon := n.icon != "" ? n.icon : (_note_icons.has(n.type) ? String(_note_icons[n.type]) : "")
+    if icon != "" { out = out + "<span class=\"q-notification-icon\" aria-hidden=\"true\">" + web.escape(icon) + "</span>" }
+    out = out + "<div class=\"q-notification-content\">"
+    if n.title != "" { out = out + "<strong class=\"q-notification-title\">" + web.escape(n.title) + "</strong>" }
+    out = out + "<p class=\"q-notification-message\">" + web.escape(n.message) + "</p></div>"
+    if n.show_close { out = out + "<button type=\"button\" class=\"q-notification-close\" aria-label=\"Close\" q-click=\"" + ev + "close\">×</button>" }
+    if n.duration > 0 { out = out + "<div class=\"q-notification-time\" style=\"animation-duration: " + String(n.duration) + "ms\"></div>" }
+    return out + "</div>"
+}
+
+define _close_note(root: Component, id: Int, run_on_close: Bool) -> void {
+    if root._notes == null { return }
+    kept := []
+    gone: _Note = null
+    for it in root._notes {
+        n: _Note = it
+        if n.id == id { gone = n } else { kept.append(n) }
+    }
+    root._notes = kept
+    if gone != null and run_on_close and gone.on_close != null {
+        h: Callable = gone.on_close
+        h()
+    }
+}
+
+// "_note:3:close" / ":after" / ":click" from the page.
+define _note_event(root: Component, event: String) -> void {
+    parts := event.split(":")
+    if parts.length() < 3 { return }
+    id := Int(String(parts[1]))
+    what: String = parts[2]
+    if what == "close" or what == "after" {
+        _close_note(root, id, true)
+        return
+    }
+    if what == "click" and root._notes != null {
+        for it in root._notes {
+            n: _Note = it
+            if n.id == id and n.on_click != null {
+                h: Callable = n.on_click
+                h()
+                return
+            }
+        }
+    }
+}
+
+// The notifications' look (added to every page; override in your CSS).
+_notes_css := """<style>
+.q-notifications { position: fixed; z-index: 2000; display: flex; flex-direction: column; gap: 12px; width: 330px; max-width: calc(100vw - 32px); pointer-events: none; }
+.q-notifications-top-right { top: 16px; right: 16px; }
+.q-notifications-top-left { top: 16px; left: 16px; }
+.q-notifications-bottom-right { bottom: 16px; right: 16px; flex-direction: column-reverse; }
+.q-notifications-bottom-left { bottom: 16px; left: 16px; flex-direction: column-reverse; }
+.q-notification { pointer-events: auto; position: relative; overflow: hidden; display: flex; gap: 12px; align-items: flex-start; box-sizing: border-box;
+  padding: 14px 26px 14px 13px; border-radius: 8px; background: #fff; color: #303133; border: 1px solid #ebeef5;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .12); font: 14px/1.5 system-ui, sans-serif; --q-tone: #909399; }
+.q-notification-clickable { cursor: pointer; }
+.q-notification-success { --q-tone: #67c23a; }
+.q-notification-warning { --q-tone: #e6a23c; }
+.q-notification-info { --q-tone: #909399; }
+.q-notification-error { --q-tone: #f56c6c; }
+.q-notification-icon { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--q-tone); color: #fff; font-weight: 700; font-size: 13px; }
+.q-notification-content { flex: 1; min-width: 0; }
+.q-notification-title { display: block; font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.q-notification-message { margin: 0; color: #606266; overflow-wrap: anywhere; }
+.q-notification-close { position: absolute; top: 12px; right: 12px; border: none; background: none; padding: 0; font-size: 16px; line-height: 1; color: #909399; cursor: pointer; }
+.q-notification-close:hover { color: #606266; }
+.q-notification-time { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--q-tone); opacity: .6; transform-origin: left;
+  animation-name: q-note-time; animation-timing-function: linear; animation-fill-mode: forwards; }
+.q-notification:hover .q-notification-time { animation-play-state: paused; }
+@keyframes q-note-time { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.q-note-right-enter { animation: q-note-in-right .3s ease-out; }
+.q-note-left-enter { animation: q-note-in-left .3s ease-out; }
+.q-note-right-leave, .q-note-left-leave { animation: q-note-out .3s ease-in forwards; }
+@keyframes q-note-in-right { from { opacity: 0; transform: translateX(100%); } }
+@keyframes q-note-in-left { from { opacity: 0; transform: translateX(-100%); } }
+@keyframes q-note-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .q-note-right-enter, .q-note-left-enter, .q-note-right-leave, .q-note-left-leave { animation-duration: .01s; } }
+</style>"""
+
 
 // ===== templates: parsing =====
 
@@ -1999,29 +2205,81 @@ _client_js := """(function () {
     patchChildren(root, t);
   }
   function keyOf(n) { return n && n.nodeType === 1 ? n.getAttribute('q-key') : null; }
+  // q-transition="name": a new element gets name-enter until its animation
+  // ends; one going away gets name-leave and is removed when it ends.
+  function entered(n) {
+    if (n.nodeType !== 1) return;
+    var list = [n].concat([].slice.call(n.querySelectorAll('[q-transition]'))), i;
+    for (i = 0; i < list.length; i++) {
+      (function (el) {
+        var name = el.getAttribute('q-transition');
+        if (!name) return;
+        el.classList.add(name + '-enter');
+        var done = function () { el.classList.remove(name + '-enter'); };
+        el.addEventListener('animationend', done, { once: true });
+        setTimeout(done, 1500);
+      })(list[i]);
+    }
+  }
+  function leave(n) {
+    var name = n.nodeType === 1 ? n.getAttribute('q-transition') : null;
+    // No transition of its own, but some inside it (the last notification of
+    // a corner, whose box goes too): their leave plays, then it goes.
+    var inside = !name && n.nodeType === 1 ? n.querySelectorAll('[q-transition]') : [];
+    if (!name && inside.length === 0) { n.parentNode.removeChild(n); return; }
+    n.setAttribute('q-leaving', '');
+    var gone = false, done = function () { if (!gone && n.parentNode) { gone = true; n.parentNode.removeChild(n); } };
+    var parts = name ? [n] : [].slice.call(inside), i, left = parts.length;
+    for (i = 0; i < parts.length; i++) {
+      (function (el) {
+        var nm = el.getAttribute('q-transition');
+        el.setAttribute('q-leaving', '');
+        el.classList.remove(nm + '-enter');
+        el.classList.add(nm + '-leave');
+        el.addEventListener('animationend', function () { if (--left === 0) done(); }, { once: true });
+      })(parts[i]);
+    }
+    setTimeout(done, 1500);
+  }
+  function alive(a) {
+    var out = [], i, c;
+    for (i = 0; i < a.childNodes.length; i++) {
+      c = a.childNodes[i];
+      if (!(c.nodeType === 1 && c.hasAttribute('q-leaving'))) out.push(c);
+    }
+    return out;
+  }
   function patchChildren(a, b) {
-    var i, k, bc = b.childNodes, want, cur, key, match;
+    var i, k, bc = [].slice.call(b.childNodes), kids, want, cur, key, match, n;
     for (i = 0; i < bc.length; i++) {
+      kids = alive(a);
       want = bc[i];
-      cur = a.childNodes[i] || null;
+      cur = kids[i] || null;
       key = keyOf(want);
       if (key) {
         // A component's element: the one with its key, moved here if need be.
         match = null;
-        for (k = i; k < a.childNodes.length; k++) if (keyOf(a.childNodes[k]) === key) { match = a.childNodes[k]; break; }
+        for (k = i; k < kids.length; k++) if (keyOf(kids[k]) === key) { match = kids[k]; break; }
         if (match) {
           if (match !== cur) a.insertBefore(match, cur);
           patch(match, want);
         } else {
-          a.insertBefore(want.cloneNode(true), cur);
+          n = want.cloneNode(true);
+          a.insertBefore(n, cur);
+          entered(n);
         }
         continue;
       }
-      if (!cur) a.appendChild(want.cloneNode(true));
-      else if (keyOf(cur)) a.insertBefore(want.cloneNode(true), cur);
-      else patch(cur, want);
+      if (!cur || keyOf(cur)) {
+        n = want.cloneNode(true);
+        a.insertBefore(n, cur);
+        entered(n);
+      } else {
+        patch(cur, want);
+      }
     }
-    while (a.childNodes.length > bc.length) a.removeChild(a.lastChild);
+    kids = alive(a);
+    for (i = kids.length - 1; i >= bc.length; i--) leave(kids[i]);
   }
   function patch(a, b) {
     if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.parentNode.replaceChild(b.cloneNode(true), a); return; }
@@ -2086,22 +2344,52 @@ _client_js := """(function () {
   });
   // @after timers, by key: started when an element with q-after first
   // appears, fired once with its current handler (if it's still there).
+  // @after timers, by key: started when an element with q-after first
+  // appears, fired once with its current handler (if it's still there).
+  // q-pause-hover: the timer stops while the mouse is on the element.
   var afterTimers = {}, afterDone = {};
+  function afterElement(key) {
+    var all = document.querySelectorAll('[q-after-key]'), j, el = null;
+    for (j = 0; j < all.length; j++) if (all[j].getAttribute('q-after-key') === key && !all[j].hasAttribute('q-leaving')) el = all[j];
+    return el;
+  }
+  function runTimer(key, ms) {
+    var t = afterTimers[key];
+    t.end = Date.now() + ms;
+    t.id = setTimeout(function () {
+      delete afterTimers[key];
+      afterDone[key] = true;
+      var el = afterElement(key);
+      if (el) { flush(); send(el, el.getAttribute('q-after'), {}); }
+    }, ms);
+  }
   function startTimers() {
     var els = document.querySelectorAll('[q-after][q-after-key]'), i;
     for (i = 0; i < els.length; i++) {
       (function (key, ms) {
         if (afterTimers[key] || afterDone[key] || !(ms > 0)) return;
-        afterTimers[key] = setTimeout(function () {
-          delete afterTimers[key];
-          afterDone[key] = true;
-          var all = document.querySelectorAll('[q-after-key]'), j, el = null;
-          for (j = 0; j < all.length; j++) if (all[j].getAttribute('q-after-key') === key) el = all[j];
-          if (el) { flush(); send(el, el.getAttribute('q-after'), {}); }
-        }, ms);
+        afterTimers[key] = { id: null, end: 0, left: 0, paused: false };
+        runTimer(key, ms);
       })(els[i].getAttribute('q-after-key'), parseInt(els[i].getAttribute('delay') || '0', 10));
     }
   }
+  function hoverKey(target) {
+    var el = target && target.closest ? target.closest('[q-pause-hover][q-after-key]') : null;
+    return el ? el.getAttribute('q-after-key') : null;
+  }
+  document.addEventListener('mouseover', function (e) {
+    var key = hoverKey(e.target), t = key ? afterTimers[key] : null;
+    if (!t || t.paused) return;
+    clearTimeout(t.id);
+    t.left = Math.max(0, t.end - Date.now());
+    t.paused = true;
+  });
+  document.addEventListener('mouseout', function (e) {
+    var key = hoverKey(e.target), t = key ? afterTimers[key] : null;
+    if (!t || !t.paused || hoverKey(e.relatedTarget) === key) return;
+    t.paused = false;
+    runTimer(key, t.left);
+  });
   function navigate(path, push) {
     fetch('/_live/nav?path=' + encodeURIComponent(path))
       .then(function (r) { return r.json(); })
@@ -2110,7 +2398,7 @@ _client_js := """(function () {
         if (res.reload || !res.id || !root) { location.href = path; return; }
         root.setAttribute('q-root', res.id);
         var t;
-        for (t in afterTimers) clearTimeout(afterTimers[t]);
+        for (t in afterTimers) clearTimeout(afterTimers[t].id);
         afterTimers = {};
         afterDone = {};
         morph(root, res.html);
@@ -2200,7 +2488,7 @@ define _page_html(comp: Component) -> String {
             page = page.replace(slot_tag, body)
         }
         script := "<script src=\"/_live/live.js\" defer></script>"
-        extra := head + (page.contains("/_live/live.js") ? "" : script)
+        extra := _notes_css + head + (page.contains("/_live/live.js") ? "" : script)
         if page.contains("</head>") {
             page = page.replace("</head>", extra + "</head>")
         } else {
@@ -2210,7 +2498,7 @@ define _page_html(comp: Component) -> String {
     }
     custom: String = _settings["layout"]
     layout := custom != "" ? custom : _default_layout
-    return html(layout, {"title": t, "head": head, "body": body})
+    return html(layout, {"title": t, "head": _notes_css + head, "body": body})
 }
 
 // The base page's text ("" for none), re-read when the file changes.
@@ -2277,7 +2565,7 @@ define _check_quirk() -> void {
     // (before 7.44.1, sys.version() always said "1.0.0")
     shown := v == "1.0.0" ? "older than 7.44.1" : v
     if not _version_at_least(v, "7.44.1") {
-        print("live: this Quirk is " + shown + "; live 2.1 needs 7.44.1 or newer (enum fields show as numbers, props can't set them). Update Quirk.")
+        print("live: this Quirk is " + shown + "; live 2 needs 7.44.1 or newer (enum fields show as numbers, props can't set them). Update Quirk.")
     }
 }
 
@@ -2310,12 +2598,16 @@ define _install_on(app: web.Router) -> void {
         data: Map = {}
         if msg.has("data") and msg["data"] != null { data = msg["data"] }
         comp._go = ""
-        comp.handle(event, data)
+        if event.startswith("_note:") {
+            _note_event(comp, event)
+        } else {
+            comp.handle(event, data)
+        }
         if comp._go != "" {
             rs.json({"redirect": comp._go})
             return
         }
-        rs.json({"html": comp.render(), "title": comp.title()})
+        rs.json({"html": _body(comp), "title": comp.title()})
     })
     app.get("/_live/nav", fn(req, res) {
         r: web.Request = req
@@ -2330,7 +2622,7 @@ define _install_on(app: web.Router) -> void {
                 nav.params = params
                 factory: Callable = entry[1]
                 comp := _make(factory, nav)
-                rs.json({"id": comp.id, "html": comp.render(), "title": comp.title()})
+                rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
                 return
             }
         }
@@ -2375,6 +2667,16 @@ struct Router : web.Router {
 }
 
 // ===== testing =====
+
+// A start tag (its text, without <) of an element that has no end tag.
+define _void_tag(tag: String) -> Bool {
+    name := tag.split(" ")[0]
+    for v in ["input", "br", "img", "hr", "meta", "link", "source", "wbr", "area", "col", "embed", "track"] {
+        vn: String = v
+        if name == vn { return true }
+    }
+    return false
+}
 
 // The value of `attr` in a start tag's text (what TestSession sends).
 define _attr_of(tag: String, attr: String, what: String) -> String {
@@ -2560,8 +2862,35 @@ struct TestSession {
         return close < 0 ? rest : rest.substring(0, close)
     }
 
+    // `attr` of the element around the first `marker` — that element's, or
+    // the nearest enclosing one's that has it (a click on a notification's
+    // text reaches the notification, as in a browser).
     define _event_at(self, marker: String, attr: String) -> String {
-        return _attr_of(self._tag_at(marker), attr, marker)
+        tag := self._tag_at(marker)
+        if tag.contains(attr + "=\"") { return _attr_of(tag, attr, marker) }
+        at := self.html.find(marker)
+        if at < 0 { return _attr_of(tag, attr, marker) }
+        // Walk the tags before the marker backwards; an opening tag while no
+        // closing one is pending is an ancestor.
+        tags := self.html.substring(0, at).split("<")
+        pending := 0
+        i := tags.length() - 1
+        while i >= 1 {
+            t: String = tags[i]
+            close := t.find(">")
+            inner := close >= 0 ? t.substring(0, close) : t
+            if inner.startswith("/") {
+                pending = pending + 1
+            } elif not inner.startswith("!") and not inner.endswith("/") and not _void_tag(inner) {
+                if pending == 0 {
+                    if inner.contains(attr + "=\"") { return _attr_of(inner, attr, marker) }
+                } else {
+                    pending = pending - 1
+                }
+            }
+            i = i - 1
+        }
+        return _attr_of(tag, attr, marker)
     }
 
     --- Follow a `q-link` to `path`. ---

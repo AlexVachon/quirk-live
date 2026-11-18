@@ -1,5 +1,5 @@
-// The demo's Notification component, on the counter page: an enum prop,
-// methods in the template, @after timers, emit to the parent, keyed children.
+// live's notifications (Component.notify, like Element Plus's
+// ElNotification): types, positions, duration, close, on_click, on_close.
 use web
 use live
 use test
@@ -17,35 +17,57 @@ define count(html: String, piece: String) -> Int {
     return html.split(piece).length() - 1
 }
 
-define test_milestones_show_notifications() -> void {
+define test_types_positions_and_markup() -> void {
     s := live.TestSession(make_app())
     s.open("/")
-    test.assert_eq(count(s.html, "class=\"notification "), 0)
+    test.assert_false(s.html.contains("q-key=\"q-note-"))           // (the page head has their CSS)
     s.click("+10")
-    test.assert_true(s.html.contains("class=\"notification success\" role=\"status\""), s.html)
-    test.assert_true(s.html.contains("<p>You reached 10!</p>"))
-    test.assert_true(s.html.contains(">✓</span>"))
-    test.assert_true(s.html.contains("delay=\"4000\""))
+    test.assert_true(s.html.contains("class=\"q-notifications q-notifications-top-right\""), s.html)
+    test.assert_true(s.html.contains("class=\"q-notification q-notification-success\" role=\"status\""))
+    test.assert_true(s.html.contains("<strong class=\"q-notification-title\">Well done</strong>"))
+    test.assert_true(s.html.contains("<p class=\"q-notification-message\">You reached 10!</p>"))
+    test.assert_true(s.html.contains("q-transition=\"q-note-right\""))
+    test.assert_true(s.html.contains("delay=\"4500\""))                       // the default duration
+    test.assert_true(s.html.contains("q-notifications-bottom-left"))         // from the PlusButton component
+    test.assert_true(s.html.contains("q-transition=\"q-note-left\""))
     s.click("reset")
-    test.assert_true(s.html.contains("<p>Counter reset.</p>"))
-    test.assert_true(s.html.contains("class=\"notification info\""))
+    test.assert_true(s.html.contains("q-notifications-top-left"))
+    test.assert_true(s.html.contains("q-notification-clickable"))           // it has on_click
     s.click("−1")
-    test.assert_true(s.html.contains("class=\"notification warning\" role=\"alert\""))
-    test.assert_eq(count(s.html, "class=\"notification "), 3)
-    test.assert_eq(count(s.html, "class=\"time-left\""), 2)         // the warning has no timeout
+    test.assert_true(s.html.contains("q-notifications-bottom-right"))
+    test.assert_true(s.html.contains("class=\"q-notification q-notification-warning\" role=\"alert\""))
+    test.assert_eq(count(s.html, "q-key=\"q-note-"), 4)
+    test.assert_eq(count(s.html, "q-notification-time"), 3)                 // the warning stays: no timer
 }
 
-define test_close_and_timers() -> void {
+define test_close_timers_and_on_close() -> void {
     s := live.TestSession(make_app())
     s.open("/")
-    s.click("+10")
-    s.click("reset")
+    s.click("+10")                                                          // success + the component's info
     s.click("−1")
-    test.assert_eq(count(s.html, "class=\"notification "), 3)
-    s.run_timers()                                                   // success and info time out
-    test.assert_eq(count(s.html, "class=\"notification "), 1)
-    test.assert_true(s.html.contains("The count is below zero."))    // timeout 0: stays
+    s.click("−1")                                                           // 8
+    s.click("reset")                                                        // 0
+    s.click("−1")                                                           // warning
+    test.assert_eq(count(s.html, "q-key=\"q-note-"), 4)
+    s.run_timers()                                                          // all but the warning time out
+    test.assert_eq(count(s.html, "q-key=\"q-note-"), 1)
+    test.assert_true(s.html.contains("below zero"))
+    test.assert_true(s.html.contains("notifications closed: 2"))            // the success and the reset ones have on_close
     s.click("×")
-    test.assert_eq(count(s.html, "class=\"notification "), 0)
-    test.assert_true(s.html.contains("<p class=\"count\">-1</p>"))   // the counter is unchanged
+    test.assert_eq(count(s.html, "q-key=\"q-note-"), 0)
+    test.assert_false(s.html.contains("class=\"q-notifications"))          // no empty corner
+    test.assert_true(s.html.contains("notifications closed: 3"))
+}
+
+define test_on_click_undo() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    s.click("+1")
+    s.click("+1")
+    s.click("reset")
+    test.assert_true(s.html.contains("<p class=\"count\">0</p>"))
+    s.click("Counter reset — click here to undo.")                          // on_click → undo()
+    test.assert_true(s.html.contains("<p class=\"count\">2</p>"))
+    test.assert_false(s.html.contains("click here to undo"))                // it closed itself
+    test.assert_true(s.html.contains("notifications closed: 1"))
 }

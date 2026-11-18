@@ -75,27 +75,44 @@ check(await until(() => !d().querySelector('ul').textContent.includes('buy milk'
 w.history.back();
 check(await until(() => !!d().querySelector('.count')), 'Back: the counter page again');
 
-// Notifications on the counter page: @after timers in the browser, enum
-// props, emit. (Back gave a fresh counter page.)
-const notes = () => [...d().querySelectorAll('.notification')];
+// Notifications (self.notify, like Element Plus): corners, enter / leave
+// transitions, pause on hover, on_click. (Back gave a fresh counter page.)
+const notes = () => [...d().querySelectorAll('.q-notification:not([q-leaving])')];
 const note = (text) => notes().find(n => n.textContent.includes(text));
-check(notes().length === 0, 'no notifications yet');
+// (a corner still playing its leave transition doesn't count: in jsdom,
+// animations never end, so it stays until the 1.5 s fallback)
+const corner = (pos) => d().querySelector('.q-notifications-' + pos + ':not([q-leaving])');
+check(notes().length === 0 && !corner('top-right'), 'no notifications yet');
+button('+10').click();
+check(await until(() => !!note('You reached 10!')), '+10: a success notification');
+check(corner('top-right') && corner('top-right').contains(note('You reached 10!')), 'in the top-right corner');
+check(note('You reached 10!').classList.contains('q-note-right-enter'), 'it enters with a transition (q-note-right-enter)');
+check(await until(() => !!note('in one go')) && corner('bottom-left').contains(note('in one go')), 'the component\'s one: bottom-left');
+check(note('in one go').getAttribute('q-transition') === 'q-note-left', 'left corners slide from the left');
+// Pause on hover: the success one (4.5 s) stays while the mouse is on it.
+const success = note('You reached 10!');
+success.dispatchEvent(new w.MouseEvent('mouseover', { bubbles: true }));
+// Leave: the bottom-left one (2.5 s) closes; it stays a moment with q-note-left-leave.
+check(await until(() => d().querySelector('[q-leaving].q-note-left-leave'), 4000), 'a closing one gets its leave transition');
+check(await until(() => !d().querySelector('.q-notifications-bottom-left .q-notification'), 2500), 'then it is removed');
+await sleep(3000);
+check(note('You reached 10!') === success, 'hovered: the success one is still there after its 4.5 s');
+success.dispatchEvent(new w.MouseEvent('mouseout', { bubbles: true, relatedTarget: d().body }));
+check(await until(() => !note('You reached 10!'), 6000), 'mouse gone: its timer resumes (with the time it had left) and it closes');
+// on_click: the reset one undoes the reset.
+check(count() === '10', 'count 10');
 button('reset').click();
-check(await until(() => !!note('Counter reset.')), 'reset: a notification');
-check(note('Counter reset.').classList.contains('info') && note('Counter reset.').getAttribute('role') === 'status', 'Info: class and role');
-button('−1').click();
-check(await until(() => !!note('below zero')), 'below zero: a warning');
-check(note('below zero').getAttribute('role') === 'alert', 'Warning: role=alert');
-const warning = note('below zero');
-check(await until(() => !note('Counter reset.'), 3500), 'the info one closes by itself after 2 s');
-check(note('below zero') === warning, 'the warning (timeout 0) stays — the same element');
-button('+10').click();
-button('+10').click();
-check(await until(() => !!note('You reached 10!')), 'reaching 10: a success notification');
-check(note('You reached 10!').classList.contains('success'), 'Success: class');
-warning.querySelector('button.close').click();
-check(await until(() => !note('below zero')), '× closes it (emit dismiss → the page removes it)');
-check(!!note('You reached 10!') && count() === '19', 'the other one and the count are untouched');
+check(await until(() => !!note('click here to undo') && count() === '0'), 'reset: 0, and a notification top-left');
+check(corner('top-left') && note('click here to undo').classList.contains('q-notification-clickable'), 'top-left, clickable');
+note('click here to undo').querySelector('.q-notification-message').click();
+check(await until(() => count() === '10' && !note('click here to undo')), 'clicking it undoes the reset and closes it');
+// A warning that stays, closed with ×.
+for (let i = 0; i < 11; i++) button('−1').click();
+check(await until(() => !!note('below zero')), 'below zero: a warning, bottom-right');
+check(corner('bottom-right').contains(note('below zero')) && note('below zero').getAttribute('role') === 'alert', 'bottom-right, role=alert');
+note('below zero').querySelector('.q-notification-close').click();
+check(await until(() => !note('below zero')), '× closes it');
+check(await until(() => d().querySelector('.closed') && d().querySelector('.closed').textContent.includes('notifications closed: 3')), 'on_close ran for each: ' + (d().querySelector('.closed') || {}).textContent);
 
 console.log(failures ? failures + ' failed' : 'all passed');
 process.exit(failures ? 1 : 0);
