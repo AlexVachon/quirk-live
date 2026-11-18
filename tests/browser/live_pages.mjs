@@ -6,11 +6,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let failures = 0;
 const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) failures++; };
 
+// A browser's cookie jar (Node's fetch keeps none): the session cookie.
+const jar = {};
+async function jarFetch(u, o = {}) {
+  const headers = Object.assign({}, o.headers || {});
+  const c = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
+  if (c) headers['Cookie'] = c;
+  const r = await fetch(u, Object.assign({}, o, { headers, redirect: 'manual' }));
+  for (const sc of r.headers.getSetCookie()) {
+    const [kv] = sc.split(';');
+    const eq = kv.indexOf('=');
+    const k = kv.slice(0, eq).trim(), v = kv.slice(eq + 1).trim();
+    if (/Max-Age=0/i.test(sc)) delete jar[k]; else jar[k] = v;
+  }
+  return r;
+}
 async function open(path) {
-  const html = await (await fetch(base + path)).text();
+  const html = await (await jarFetch(base + path)).text();
   const dom = new JSDOM(html, { url: base + path, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
-  w.fetch = (u, o) => fetch(new URL(u, base), o);
+  w.fetch = (u, o) => jarFetch(new URL(u, base), o);
   w.scrollTo = () => {};
   w.eval(await (await fetch(base + '/_live/live.js')).text());
   return w;
@@ -137,6 +152,28 @@ check(/[0-9]+ pages in this layout/.test(d().querySelector('.scratchpad small').
 go('/hello/world');
 check(await until(() => !!d().getElementById('hello')) && scratch().value === 'remember me', 'Hello too, the text still there');
 check(link('/hello/world').classList.contains('active'), 'path.startswith(\'/hello\') marks it');
+
+// Login: a guarded page, the login form, back to it; then log out.
+go('/account');
+check(await until(() => !!input('Password')), 'Account (guarded): the login page instead');
+check(w.location.pathname === '/login' && w.location.search.includes('next='), 'URL: ' + w.location.pathname + w.location.search);
+type(input('Name'), 'ada');
+type(input('Password'), 'wrong');
+d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+check(await until(() => !!d().querySelector('.error')), 'a wrong password: an error');
+type(input('Password'), 'quirk');
+d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+check(await until(() => !!d().querySelector('.account')), 'logged in: back to Account');
+check(w.location.pathname === '/account', 'URL: ' + w.location.pathname);
+check(d().querySelector('.account').textContent.includes('ada') && d().querySelector('.who').textContent.includes('ada'), 'the page and the layout know who');
+check(!!jar.quirk_session, 'the session cookie is set');
+check(d().querySelector('.layout nav') === nav && scratch().value === 'remember me', 'the layout stayed through the login');
+check(await until(() => !!note('Welcome, ada!')), 'a welcome notification');
+d().querySelector('.who button').click();
+check(await until(() => w.location.pathname === '/' && d().querySelector('.who').textContent.includes('Log in')), 'logged out: home, "Log in" again');
+check(!jar.quirk_session, 'the cookie is cleared');
+go('/account');
+check(await until(() => !!input('Password')), 'Account: the login page again');
 
 console.log(failures ? failures + ' failed' : 'all passed');
 process.exit(failures ? 1 : 0);

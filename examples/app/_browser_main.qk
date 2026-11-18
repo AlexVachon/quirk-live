@@ -6,6 +6,7 @@ from router use { router }
 define main() -> void {
     app := web.App()
     app.use(web.static("public"))
+    app.use(web.sessions())
     app.mount("/", router)
     app.listen(Int(sys.getenv("PORT")))
 }

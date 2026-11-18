@@ -5,3 +5,7 @@
 .scratchpad { margin-top: 2rem; display: flex; flex-direction: column; gap: .25rem; }
 .scratchpad input { padding: .4rem .5rem; }
 .scratchpad small { color: #6b7280; }
+.layout .who { margin-left: auto; }
+.layout button.link { border: none; background: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+.login { display: flex; flex-direction: column; gap: .5rem; max-width: 18rem; }
+.error { color: #dc2626; }

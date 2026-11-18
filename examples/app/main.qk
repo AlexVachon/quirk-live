@@ -10,6 +10,7 @@ const PORT: Int = 3000
 define main() -> void {
     app := web.App()
     app.use(web.static("public"))
+    app.use(web.sessions())          // the visitor's session: login (src/pages/login.qk)
     app.mount("/", router)
     
     app.listen(PORT)

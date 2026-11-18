@@ -3,7 +3,10 @@ from live use { Router }
 from src.pages.counter use { CounterPage }
 from src.pages.todos use { TodoPage }
 from src.pages.hello use { HelloPage }
+from src.pages.login use { LoginPage }
+from src.pages.account use { AccountPage }
 from src.layouts.main use { MainLayout }
+use live
 
 router = Router()
 
@@ -13,3 +16,8 @@ main := router.group(layout=MainLayout)
 main.add("/", CounterPage)
 main.add("/todos", TodoPage)
 main.add("/hello/:name", HelloPage)
+main.add("/login", LoginPage)
+
+// Logged-in visitors only: others go to /login (and come back after).
+members := router.group(layout=MainLayout, guard=live.require_login())
+members.add("/account", AccountPage)

@@ -269,6 +269,44 @@ router.add("/about", AboutPage, layout=MainLayout)   // or one page at a time
 
 `index.html` stays the outer page of the whole app.
 
+## Login
+
+With `app.use(web.sessions())` in the app (see
+[web](https://github.com/AlexVachon/quirk-web#sessions-and-login)):
+
+```quirk
+// router.qk
+members := router.group(layout=MainLayout, guard=live.require_login())
+members.add("/account", AccountPage)
+router.add("/login", LoginPage)
+```
+
+```quirk
+struct LoginPage : live.Page {
+    name: String
+    password: String
+
+    define submit(self) -> void {
+        if not check_password(self.name, self.password) { return }
+        self.login(self.name)                       // a new session id, then the user stored
+        next := self.query("next")                  // the page the guard sent us from
+        self.go(next != "" ? next : "/account")
+    }
+    // template: <form @submit="submit"><input model="name"> ... </form>
+}
+```
+
+- A guard runs when the page is opened, when a `q-link` goes to it, and
+  before every event — a page still open after logging out sends its visitor
+  to the login page at their next click.
+- `live.require_login(redirect="/login")` lets logged-in visitors in and
+  sends the others to `/login?next=<the page>`. A guard of your own is
+  `fn(req) -> String`: `""` to let the visitor in, else where to send them
+  (`router.add("/admin", AdminPage, guard=only_admins)`).
+- In pages, layouts and components: `self.login(user)`, `self.logout()`,
+  `self.user()` (in templates: `{% if user %}…{{ user }}…{% end %}`), and
+  `self.session()` for anything else to keep (`self.session().set("cart", items)`).
+
 ## The base page
 
 `index.html` in the app's folder (the folder you run it from), when it has a
@@ -363,7 +401,8 @@ served with `live.page(app, "/", fn(req) { return Counter() })`.
 
 Quirk 7.44.1 or newer (run-time reflection, enum fields by name, raw
 strings, `type=` as an argument name, a page struct passed by name to
-`router.add`), and the `web` package (bundled with Quirk).
+`router.add`), and the `web` package 1.1 or newer (bundled with Quirk; its
+sessions for login).
 
 ## License
 

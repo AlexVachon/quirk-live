@@ -1,0 +1,167 @@
+// Sessions and login guards in live pages (web.sessions + live.require_login).
+use web
+use live
+use test
+
+struct LoginPage : live.Page {
+    name: String
+    password: String
+    error: String
+
+    define on_load(self) -> void {
+        self.name = ""
+        self.password = ""
+        self.error = ""
+    }
+
+    define submit(self) -> void {
+        if self.password != "secret" {
+            self.error = "Wrong password"
+            return
+        }
+        self.login(self.name)
+        next := self.query("next")
+        self.go(next != "" ? next : "/account")
+    }
+
+    define template(self) -> String {
+        return r"""<form @submit="submit"><input model="name" placeholder="Name"><input type="password" model="password" placeholder="Password"><button>Log in</button></form>{% if error %}<p class="error">{{ error }}</p>{% end %}"""
+    }
+}
+
+struct AreaLayout : live.Layout {
+    define sign_out(self) -> void {
+        self.logout()
+        self.go("/login")
+    }
+
+    define template(self) -> String {
+        return r"""<header>Logged in as {{ user }} <button @click="sign_out">Log out</button></header><slot />"""
+    }
+}
+
+struct AccountPage : live.Page {
+    visits: Int
+
+    define on_load(self) -> void {
+        s := self.session()
+        self.visits = Int(s.get("visits", 0)) + 1
+        s.set("visits", self.visits)
+    }
+
+    define template(self) -> String {
+        return r"""<p>Account of {{ user }}, visit {{ visits }}</p>"""
+    }
+}
+
+struct SettingsPage : live.Page {
+    define template(self) -> String {
+        return r"""<p>Settings of {{ user }}</p>"""
+    }
+}
+
+struct PublicPage : live.Page {
+    define template(self) -> String {
+        return r"""<p>public{% if user %}, hi {{ user }}{% end %}</p>"""
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/", PublicPage)
+    router.add("/login", LoginPage)
+    area := router.group(layout=AreaLayout, guard=live.require_login())
+    area.add("/account", AccountPage)
+    area.add("/settings", SettingsPage)
+    app := web.App()
+    app.use(web.sessions(secret="t"))
+    app.mount("/", router)
+    return app
+}
+
+define test_guarded_page_redirects_to_login() -> void {
+    s := live.TestSession(make_app())
+    s.open("/account")
+    test.assert_eq(s.status, 302)
+    res := s.client.get("/settings?tab=1", {"Accept": "text/html"})
+    test.assert_eq(res.get("Location"), "/login?next=%2Fsettings%3Ftab%3D1")
+    s.open("/")
+    s.navigate("/account")                                        // a q-link to it: to the login page
+    test.assert_true(s.html.contains("placeholder=\"Password\""), s.html)
+    test.assert_true(s.location.startswith("/login?next="))
+}
+
+define test_login_then_back_to_next() -> void {
+    s := live.TestSession(make_app())
+    s.open("/login?next=%2Fsettings")
+    s.type("Name", "ada")
+    s.type("Password", "nope")
+    s.submit_form("Name", {})
+    test.assert_true(s.html.contains("Wrong password"))
+    s.type("Password", "secret")
+    s.submit_form("Name", {})
+    test.assert_eq(s.location, "/settings")
+    test.assert_true(s.html.contains("Settings of ada"), s.html)
+    test.assert_true(s.html.contains("Logged in as ada"))
+    s.navigate("/account")
+    test.assert_true(s.html.contains("Account of ada, visit 1"))
+    s.navigate("/settings")
+    s.navigate("/account")
+    test.assert_true(s.html.contains("visit 2"))                  // kept in the session
+    s.navigate("/")
+    test.assert_true(s.html.contains("hi ada"))
+}
+
+define test_logout_and_pages_left_open() -> void {
+    app := make_app()
+    s := live.TestSession(app)
+    s.open("/login")
+    s.type("Name", "bob")
+    s.type("Password", "secret")
+    s.submit_form("Name", {})
+    test.assert_true(s.html.contains("Account of bob"))
+    account_id := s.id
+    page_html := s.html
+    s.click("Log out")
+    test.assert_true(s.location.startswith("/login"))
+    test.assert_false(s.client.cookies.has("quirk_session"))
+    // The account page, still open in another tab: its next event bounces.
+    s.id = account_id
+    at := page_html.find("q-click=\"")
+    rest := page_html.substring(at + 9, page_html.length())
+    s.send(rest.substring(0, rest.find("\"")), {})
+    test.assert_true(s.location.startswith("/login?next="), s.location)
+    s.open("/account")
+    test.assert_eq(s.status, 302)
+}
+
+struct InLayoutLogin : live.Page {
+    define enter(self) -> void {
+        self.login("cy")
+        self.go("/account")
+    }
+
+    define template(self) -> String {
+        return r"""<button @click="enter">enter</button>"""
+    }
+}
+
+define test_login_inside_the_layout_updates_it() -> void {
+    router := live.Router()
+    open_area := router.group(layout=AreaLayout)
+    open_area.add("/door", InLayoutLogin)
+    area := router.group(layout=AreaLayout, guard=live.require_login())
+    area.add("/account", AccountPage)
+    app := web.App()
+    app.use(web.sessions(secret="t"))
+    app.mount("/", router)
+    s := live.TestSession(app)
+    s.open("/door")
+    test.assert_true(s.html.contains("Logged in as  <button"))        // nobody yet
+    layout_id := s.id
+    s.click("enter")
+    test.assert_eq(s.location, "/account")
+    test.assert_eq(s.id, layout_id)                                     // the same layout ...
+    test.assert_true(s.html.contains("Logged in as cy"), s.html)        // ... which sees the login
+    test.assert_true(s.html.contains("Account of cy"))
+}

@@ -17,6 +17,12 @@ struct MainLayout : live.Layout {
         self.pages_seen = self.pages_seen + 1
     }
 
+    define sign_out(self) -> void {
+        self.logout()
+        self.notify("You're logged out.", type="info", duration=2500)
+        self.go("/")
+    }
+
     define template(self) -> String {
         return r"""
             <div class="layout">
@@ -24,6 +30,10 @@ struct MainLayout : live.Layout {
                 <a href="/" q-link :class="path == '/' ? 'active' : ''">Counter</a>
                 <a href="/todos" q-link :class="path == '/todos' ? 'active' : ''">Todos</a>
                 <a href="/hello/world" q-link :class="path.startswith('/hello') ? 'active' : ''">Hello</a>
+                <a href="/account" q-link :class="path == '/account' ? 'active' : ''">Account</a>
+                <span class="who">
+                  {% if user %}{{ user }} · <button class="link" @click="sign_out">Log out</button>{% else %}<a href="/login" q-link>Log in</a>{% end %}
+                </span>
               </nav>
               <section class="page">
                 <slot />

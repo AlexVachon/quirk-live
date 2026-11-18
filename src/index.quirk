@@ -42,6 +42,7 @@ app.listen(3000)
 use web
 use fs
 use sys
+use url
 use crypto
 use encoding.json
 
@@ -116,6 +117,8 @@ struct Component {
     _note_next: Int
     _outer: Component     // a page inside a live.Layout: that layout
     _hid: String          // its handler ids' prefix ("h"; a page in a layout: "p3h")
+    _guard: Callable      // the route's guard (router.add(..., guard=))
+    _now_req: web.Request // the request being handled (an event's), on the root
 
     define __init(self) -> void {
         self.id = ""
@@ -132,6 +135,8 @@ struct Component {
         self._note_next = 1
         self._outer = null
         self._hid = "h"
+        self._guard = null
+        self._now_req = null
     }
 
     --- Set up the component's state (override). Runs once, before it's first shown. ---
@@ -224,6 +229,42 @@ struct Component {
             ids.append(n.id)
         }
         for i in ids { _close_note(root, Int(i), true) }
+    }
+
+    --- The visitor's session (needs `app.use(web.sessions())`): `self.session().set("cart", items)`. ---
+    define session(self) -> web.Session {
+        return self._current_request().session()
+    }
+
+    --- Log `user` in (a name, a Map, a struct): a new session id, then `user` stored. ---
+    define login(self, user: Any) -> void {
+        web.login(self._current_request(), user)
+    }
+
+    --- Log out: the session ends. ---
+    define logout(self) -> void {
+        web.logout(self._current_request())
+    }
+
+    --- Who's logged in, or null (in templates: `{% if user %}…{{ user }}…{% end %}`). ---
+    define user(self) -> Any {
+        r := self._current_request()
+        if r == null { return null }
+        return r.user()
+    }
+
+    // The request being handled: an event's while it runs, else the page's.
+    define _current_request(self) -> web.Request {
+        root := self._root_of()
+        if root._now_req != null { return root._now_req }
+        return self._request()
+    }
+
+    // The route's guard for the page shown, run for `req`: "" (go on) or where to send the visitor.
+    define _guard_check(self, req: web.Request) -> String {
+        if self._guard == null { return "" }
+        g: Callable = self._guard
+        return _text(g(req))
     }
 
     // The session's root: a page's layout, a component's page (and its layout).
@@ -516,6 +557,7 @@ struct Layout : Component {
         page._hid = "p" + String(self._serial) + "h"
         self.page = page
         self.path = req.path
+        self.request = req              // the current page's: its path, params, session
         page._start()
         self.on_navigate(req.path)
     }
@@ -538,6 +580,11 @@ struct Layout : Component {
     define _widget(self, text: String) -> Widget {
         if self.page == null { return null }
         return self.page._widget(text)
+    }
+
+    define _guard_check(self, req: web.Request) -> String {
+        if self.page == null { return "" }
+        return self.page._guard_check(req)
     }
 }
 
@@ -2595,6 +2642,7 @@ _client_js := """(function () {
       .then(function (r) { return r.json(); })
       .then(function (res) {
         var root = document.querySelector('[q-root]');
+        if (res.redirect) { navigate(res.redirect, true); return; }
         if (res.reload || !res.id || !root) { location.href = path; return; }
         // (a layout that stays keeps its timers; a new page drops the old ones)
         if (!res.kept) {
@@ -2621,7 +2669,7 @@ _client_js := """(function () {
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.4.0-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.5.0-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====
@@ -2825,11 +2873,26 @@ define _install_on(app: web.Router) -> void {
         data: Map = {}
         if msg.has("data") and msg["data"] != null { data = msg["data"] }
         comp._go = ""
-        if event.startswith("_note:") {
-            _note_event(comp, event)
-        } else {
-            comp.handle(event, data)
+        // The page's guard again (the visitor may have logged out since).
+        page_req := web.Request("GET", comp.request != null ? comp.request.url : "/", r.headers)
+        page_req._session = r._session
+        dest := comp._guard_check(page_req)
+        if dest != "" {
+            rs.json({"redirect": dest})
+            return
         }
+        comp._now_req = r
+        try {
+            if event.startswith("_note:") {
+                _note_event(comp, event)
+            } else {
+                comp.handle(event, data)
+            }
+        } finally {
+            comp._now_req = null
+        }
+        // (logged in or out during the event: the page sees the session it has now)
+        if comp.request != null { comp.request._session = r._session }
         if comp._go != "" {
             rs.json({"redirect": comp._go})
             return
@@ -2841,6 +2904,7 @@ define _install_on(app: web.Router) -> void {
         rs: web.Response = res
         target := r.query.has("path") ? String(r.query["path"]) : "/"
         nav := web.Request("GET", target, r.headers)
+        nav._session = r._session
         for p in _pages {
             entry: List = p
             route: web.Route = entry[0]
@@ -2849,6 +2913,14 @@ define _install_on(app: web.Router) -> void {
                 nav.params = params
                 factory: Callable = entry[1]
                 kind: String = entry.length() > 3 ? String(entry[3]) : ""
+                if entry.length() > 4 and entry[4] != null {
+                    g: Callable = entry[4]
+                    dest := _text(g(nav))
+                    if dest != "" {
+                        rs.json({"redirect": dest})
+                        return
+                    }
+                }
                 if kind != "" {
                     // Same layout as the page we're on: it stays, only its page changes.
                     here := r.query.has("from") ? _find(String(r.query["from"])) : null
@@ -2898,28 +2970,57 @@ struct Router : web.Router {
     `path` — in the live.Layout `layout`, if given (a group does that for
     several pages).
     ---
-    define add(self, path: String, page: Callable, layout: Callable = null) -> Router {
+    define add(self, path: String, page: Callable, layout: Callable = null, guard: Callable = null) -> Router {
         _install_on(self)
-        make := fn(req) { return page() }
+        make := fn(req) {
+            made: Component = page()
+            made._guard = guard
+            return made
+        }
         kind := ""
         if layout != null {
             probe := layout()
             kind = type_name(probe)
             if not has_field(probe, "_serial") { throw ValueError("live: router.add(layout=...): " + kind + " isn't a live.Layout") }
         }
-        _pages.append([web.Route("GET", path, make), make, layout, kind])
+        _pages.append([web.Route("GET", path, make), make, layout, kind, guard])
         self.get(path, fn(req, res) {
             r: web.Request = req
             rs: web.Response = res
+            if guard != null {
+                dest := _text(guard(r))
+                if dest != "" {
+                    rs.redirect(dest)
+                    return
+                }
+            }
             comp := layout != null ? _make_in_layout(layout, make, r) : _make(make, r)
             rs.html(_page_html(comp))
         })
         return self
     }
 
-    --- Pages sharing the live.Layout `layout`: `main := router.group(layout=MainLayout)`, then `main.add("/", HomePage)`. ---
-    define group(self, layout: Callable) -> RouteGroup {
-        return RouteGroup(self, layout)
+    ---
+    Pages sharing a live.Layout and / or a guard:
+    `admin := router.group(layout=AdminLayout, guard=live.require_login())`,
+    then `admin.add("/admin", AdminPage)`.
+    ---
+    define group(self, layout: Callable = null, guard: Callable = null) -> RouteGroup {
+        return RouteGroup(self, layout, guard)
+    }
+}
+
+---
+A guard: only logged-in visitors (what `self.login(user)` / `web.login`
+stored) see the page; others go to `redirect`, with `?next=` the page they
+wanted. Needs `app.use(web.sessions())`. A guard of your own is
+`fn(req) -> String`: "" to let the visitor in, else where to send them.
+---
+define require_login(redirect: String = "/login") -> Callable {
+    return fn(req) {
+        r: web.Request = req
+        if r.user() != null { return "" }
+        return redirect + "?next=" + url.quote(r.url)
     }
 }
 
@@ -2927,15 +3028,17 @@ struct Router : web.Router {
 struct RouteGroup {
     router: Router
     layout: Callable
+    guard: Callable
 
-    define __init(self, router: Router, layout: Callable) -> void {
+    define __init(self, router: Router, layout: Callable = null, guard: Callable = null) -> void {
         self.router = router
         self.layout = layout
+        self.guard = guard
     }
 
-    --- Serve `page` at `path`, in the group's layout. ---
+    --- Serve `page` at `path`, in the group's layout, behind its guard. ---
     define add(self, path: String, page: Callable) -> RouteGroup {
-        self.router.add(path, page, layout=self.layout)
+        self.router.add(path, page, layout=self.layout, guard=self.guard)
         return self
     }
 }
@@ -3173,6 +3276,7 @@ struct TestSession {
         self.status = res.status_code
         m: Map = json.loads(res.body)
         self.location = path
+        if m.has("redirect") { return self.navigate(String(m["redirect"])) }
         if m.has("reload") { return self.open(path) }
         self.id = String(m["id"])
         self.html = String(m["html"])

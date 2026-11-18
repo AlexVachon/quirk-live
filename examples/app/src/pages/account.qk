@@ -1,0 +1,24 @@
+use live
+
+// Only for logged-in visitors (router.qk: the group's guard).
+struct AccountPage : live.Page {
+    visits: Int
+
+    define on_load(self) -> void {
+        // Kept in the session: it lasts across pages and reloads, until logout.
+        s := self.session()
+        self.visits = Int(s.get("account_visits", 0)) + 1
+        s.set("account_visits", self.visits)
+    }
+
+    define title(self) -> String {
+        return "Account"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Account</h1>
+            <p class="account">Logged in as <b>{{ user }}</b> — visit {{ visits }} to this page.</p>
+        """
+    }
+}

@@ -1,0 +1,41 @@
+use live
+
+// A demo login: any name, password "quirk". A real app checks a database.
+struct LoginPage : live.Page {
+    name: String
+    password: String
+    error: String
+
+    define on_load(self) -> void {
+        self.name = ""
+        self.password = ""
+        self.error = ""
+    }
+
+    define submit(self) -> void {
+        if self.name.trim() == "" or self.password != "quirk" {
+            self.error = "Try any name, with the password quirk."
+            return
+        }
+        self.login(self.name.trim())
+        self.notify("Welcome, " + self.name.trim() + "!", type="success", duration=3000)
+        next := self.query("next")
+        self.go(next != "" ? next : "/account")
+    }
+
+    define title(self) -> String {
+        return "Log in"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Log in</h1>
+            <form class="login" @submit="submit">
+              <input model="name" placeholder="Name" autocomplete="username">
+              <input type="password" model="password" placeholder="Password" autocomplete="current-password">
+              <button>Log in</button>
+            </form>
+            {% if error %}<p class="error" role="alert">{{ error }}</p>{% end %}
+        """
+    }
+}
