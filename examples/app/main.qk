@@ -2,13 +2,15 @@
 // index.html is the base page; src/pages/ has the pages, src/components/ the components.
 use web
 use sys
+
 from router use { router }
+
+const PORT: Int = 3000
 
 define main() -> void {
     app := web.App()
     app.use(web.static("public"))
     app.mount("/", router)
-    port := 3000
-    if sys.getenv("PORT") != "" { port = Int(sys.getenv("PORT")) }
-    app.listen(port)
+    
+    app.listen(PORT)
 }

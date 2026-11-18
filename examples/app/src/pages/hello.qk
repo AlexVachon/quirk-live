@@ -3,6 +3,10 @@ use live
 struct HelloPage : live.Page {
     name: String
 
+    define title(self) {
+        return "Hello World!"
+    }
+    
     define on_load(self) -> void {
         self.name = self.param("name")          // from /hello/:name
     }
