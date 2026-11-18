@@ -178,12 +178,21 @@ define save(self) -> void {
 | `message` | the text |
 | `title=""` | in bold above it |
 | `type=""` | `"success"`, `"warning"`, `"info"`, `"error"` (an icon and a color; errors and warnings are read out at once by screen readers) |
-| `position="top-right"` | `"top-left"`, `"bottom-right"`, `"bottom-left"`; they stack in their corner |
-| `duration=4500` | milliseconds before it closes; `0`: until closed. The timer pauses while the mouse is on it |
+| `position` | `"top-right"` (default), `"top-left"`, `"bottom-right"`, `"bottom-left"`; they stack in their corner |
+| `duration` | milliseconds before it closes (default 4500); `0`: until closed. The timer pauses while the mouse is on it |
 | `show_close=true` | the × button |
 | `icon=""` | instead of the type's |
 | `on_click=fn() {...}` | when it's clicked |
 | `on_close=fn() {...}` | when it closes (×, its timer, or `close_notification`) |
+
+Defaults for the whole app, set once at startup (each `notify` can still
+say otherwise):
+
+```quirk
+live.notification_defaults(position="bottom-right", duration=3000, max=5)
+```
+
+`max` is the most shown at once: over it, the oldest close (0: no limit).
 
 `notify` returns the notification's id: `self.close_notification(id)`,
 `self.close_notifications()` close them. The look is plain CSS

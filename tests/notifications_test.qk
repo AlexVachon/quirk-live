@@ -71,3 +71,42 @@ define test_on_click_undo() -> void {
     test.assert_false(s.html.contains("click here to undo"))                // it closed itself
     test.assert_true(s.html.contains("notifications closed: 1"))
 }
+
+// A page that notifies with no position or duration of its own.
+struct PlainPage : live.Page {
+    define say(self, text: String) -> void {
+        self.notify(text, on_close=fn() { print("closed " + text) })
+    }
+
+    define template(self) -> String {
+        return r"""<button @click="say('one')">one</button><button @click="say('two')">two</button><button @click="say('three')">three</button>"""
+    }
+}
+
+define test_notification_defaults() -> void {
+    router := live.Router()
+    router.add("/", PlainPage)
+    app := web.App()
+    app.mount("/", router)
+    s := live.TestSession(app)
+    s.open("/")
+    s.click("one")
+    test.assert_true(s.html.contains("q-notifications-top-right"))          // built-in default
+    test.assert_true(s.html.contains("delay=\"4500\""))
+    live.notification_defaults(position="bottom-left", duration=1500, max=2)
+    s.click("two")
+    test.assert_true(s.html.contains("q-notifications-bottom-left"))
+    test.assert_true(s.html.contains("delay=\"1500\""))
+    s.click("three")                                                       // a third: over max=2
+    test.assert_eq(count(s.html, "q-key=\"q-note-"), 2)
+    test.assert_false(s.html.contains(">one</p>"))                          // the oldest closed
+    test.assert_true(s.html.contains(">three</p>"))
+    caught := false
+    try {
+        live.notification_defaults(position="middle")
+    } catch (e: ValueError) {
+        caught = true
+    }
+    test.assert_true(caught)
+    live.notification_defaults(position="top-right", duration=4500, max=0)  // back to the built-in ones
+}

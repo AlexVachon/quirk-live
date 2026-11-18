@@ -72,6 +72,9 @@ extern define field_names(obj: Any) -> List
 --- The struct's public method names. ---
 extern define method_names(obj: Any) -> List
 
+// notify()'s defaults (live.notification_defaults).
+_note_defaults := {"position": "top-right", "duration": 4500, "max": 0}
+
 // ===== components =====
 
 ---
@@ -173,22 +176,31 @@ struct Component {
     template. Returns its id (for `close_notification`).
 
     - `type`: "success", "warning", "info", "error" or "" (none)
-    - `position`: "top-right" (default), "top-left", "bottom-right", "bottom-left"
-    - `duration`: milliseconds before it closes (0: stays until closed);
-      the timer pauses while the mouse is on it
+    - `position`: "top-right", "top-left", "bottom-right", "bottom-left"
+      ("": the default — top-right, or live.notification_defaults')
+    - `duration`: milliseconds before it closes (0: stays until closed;
+      -1: the default — 4500); the timer pauses while the mouse is on it
     - `show_close`: the × button; `icon`: instead of the type's
     - `on_click()`: when it's clicked; `on_close()`: when it closes (×,
       timeout or close_notification)
     ---
-    define notify(self, message: String, title: String = "", type: String = "", position: String = "top-right",
-                  duration: Int = 4500, show_close: Bool = true, icon: String = "",
+    define notify(self, message: String, title: String = "", type: String = "", position: String = "",
+                  duration: Int = -1, show_close: Bool = true, icon: String = "",
                   on_click: Callable = null, on_close: Callable = null) -> Int {
         root := self._root_of()
         if root._notes == null { root._notes = [] }
         if root._note_next == 0 { root._note_next = 1 }
-        n := _Note(root._note_next, message, title, type, position, duration, show_close, icon, on_click, on_close)
+        corner: String = position != "" ? position : String(_note_defaults["position"])
+        ms: Int = duration >= 0 ? duration : Int(_note_defaults["duration"])
+        n := _Note(root._note_next, message, title, type, corner, ms, show_close, icon, on_click, on_close)
         root._note_next = root._note_next + 1
         root._notes.append(n)
+        // Over the limit: the oldest ones close (their on_close runs).
+        most := Int(_note_defaults["max"])
+        while most > 0 and root._notes.length() > most {
+            oldest: _Note = root._notes[0]
+            _close_note(root, oldest.id, true)
+        }
         return n.id
     }
 
@@ -280,6 +292,26 @@ struct _Note {
 }
 
 _note_positions := ["top-right", "top-left", "bottom-right", "bottom-left"]
+
+---
+Defaults for every `notify()` that doesn't say otherwise — set once, at
+startup: `position` ("top-right", "top-left", "bottom-right",
+"bottom-left"), `duration` (milliseconds; 0: until closed) and `max` (the
+most shown at once; over it, the oldest close; 0: no limit). Arguments left
+out keep their current value.
+
+    live.notification_defaults(position="bottom-right", duration=3000, max=5)
+---
+define notification_defaults(position: String = "", duration: Int = -1, max: Int = -1) -> void {
+    if position != "" {
+        if not _known_position(position) {
+            throw ValueError("live.notification_defaults: unknown position '" + position + "' (top-right, top-left, bottom-right or bottom-left)")
+        }
+        _note_defaults["position"] = position
+    }
+    if duration >= 0 { _note_defaults["duration"] = duration }
+    if max >= 0 { _note_defaults["max"] = max }
+}
 _note_icons := {"success": "✓", "warning": "!", "info": "i", "error": "✕"}
 
 // What the page shows: the component, then its notifications.
@@ -2428,7 +2460,7 @@ _client_js := """(function () {
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.2.2-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.3.0-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====
