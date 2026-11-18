@@ -41,6 +41,7 @@ app.listen(3000)
 ---
 use web
 use fs
+use sys
 use crypto
 use encoding.json
 
@@ -769,8 +770,18 @@ define _member(v: Any, name: String) -> Any {
     }
     if has_field(v, name) { return get_field(v, name) }
     if has_method(v, name) { return call_method(v, name, []) }
-    _tfail("'" + name + "' isn't a field of " + type_name(v))
+    _tfail("'" + name + "' isn't a field of " + _describe(v))
     return null
+}
+
+// A value, for messages: "a TodoPage", "an Int (2)", "a Bool (true)".
+define _describe(v: Any) -> String {
+    t := type_name(v)
+    if t != "" { return (("AEIOU".contains(t.substring(0, 1))) ? "an " : "a ") + t }
+    if v is Int { return "an Int (" + _text(v) + ")" }
+    if v is Double { return "a Double (" + _text(v) + ")" }
+    if v is Bool { return "a Bool (" + _text(v) + ")" }
+    return "a value (" + _text(v) + ")"
 }
 
 define _truthy(v: Any) -> Bool {
@@ -2229,8 +2240,50 @@ define _install(app: web.App) -> void {
     _install_on(app._router)
 }
 
+// "7.44.1" → [7, 44, 1] (missing parts: 0).
+define _version_parts(v: String) -> List {
+    out := []
+    for p in v.split(".") {
+        part: String = p
+        digits := ""
+        for c in part.split("") {
+            ch: String = c
+            if ch >= "0" and ch <= "9" { digits = digits + ch } else { break }
+        }
+        out.append(digits == "" ? 0 : Int(digits))
+    }
+    while out.length() < 3 { out.append(0) }
+    return out
+}
+
+// `have` is at least `need` ("7.44.1").
+define _version_at_least(have: String, need: String) -> Bool {
+    a := _version_parts(have)
+    b := _version_parts(need)
+    i := 0
+    while i < 3 {
+        x: Int = a[i]
+        y: Int = b[i]
+        if x != y { return x > y }
+        i = i + 1
+    }
+    return true
+}
+
+// Say so once when the compiler is older than this package needs.
+define _check_quirk() -> void {
+    if _installed.length() > 0 { return }
+    v := sys.version()
+    // (before 7.44.1, sys.version() always said "1.0.0")
+    shown := v == "1.0.0" ? "older than 7.44.1" : v
+    if not _version_at_least(v, "7.44.1") {
+        print("live: this Quirk is " + shown + "; live 2.1 needs 7.44.1 or newer (enum fields show as numbers, props can't set them). Update Quirk.")
+    }
+}
+
 // The /_live/ endpoints, once per router.
 define _install_on(app: web.Router) -> void {
+    _check_quirk()
     for a in _installed {
         known: web.Router = a
         if known == app { return }
