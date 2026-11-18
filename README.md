@@ -307,6 +307,42 @@ struct LoginPage : live.Page {
   `self.user()` (in templates: `{% if user %}…{{ user }}…{% end %}`), and
   `self.session()` for anything else to keep (`self.session().set("cart", items)`).
 
+## Live updates from the server
+
+A page can change without its visitor doing anything — a clock, a job's
+progress, what another visitor just did. Each open page keeps one stream to
+the server (it reconnects by itself), and these show the page again:
+
+```quirk
+struct ChatPage : live.Page {
+    define on_load(self) -> void {
+        self.subscribe("chat")                         // get live.publish("chat", ...)
+        self.every(1000, fn() { self.now = clock() })  // a timer on the server, while the page is open
+    }
+
+    define send(self) -> void {
+        save_message(self.draft)
+        live.publish("chat", self.draft)               // every subscribed page: on_message, then shown again
+    }
+
+    define on_message(self, topic: String, data: Any) -> void {
+        // update fields from data (or read them again where they're kept)
+    }
+}
+```
+
+- `self.refresh()` — show the page again now, after a change made outside
+  an event (a background task, another page).
+- `self.every(ms, fn() {...})` — runs while the page is open, then shows it
+  again; it stops when the visitor leaves (navigates away, or closes the tab).
+- `self.subscribe(topic)` / `unsubscribe(topic)`; `live.publish(topic,
+  data)` from anywhere — another visitor's event, a route, a timer;
+  `live.subscribers(topic)` counts the pages open now.
+- In tests, `TestSession.receive()` takes what was pushed (true if anything).
+
+The demo's Live page (`examples/app/src/pages/live.qk`) has a clock and a
+chat between tabs. Each open tab holds a connection to the server.
+
 ## The base page
 
 `index.html` in the app's folder (the folder you run it from), when it has a
@@ -401,8 +437,9 @@ served with `live.page(app, "/", fn(req) { return Counter() })`.
 
 Quirk 7.44.1 or newer (run-time reflection, enum fields by name, raw
 strings, `type=` as an argument name, a page struct passed by name to
-`router.add`), and the `web` package 1.1 or newer (bundled with Quirk; its
-sessions for login).
+`router.add`), and the `web` package 1.2 or newer (bundled with Quirk:
+sessions for login, event streams for live updates). For live updates,
+Quirk 7.47.0 (a closed tab no longer stops the server).
 
 ## License
 

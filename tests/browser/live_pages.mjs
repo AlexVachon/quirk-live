@@ -26,6 +26,43 @@ async function open(path) {
   const dom = new JSDOM(html, { url: base + path, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   w.fetch = (u, o) => jarFetch(new URL(u, base), o);
+  // jsdom has no EventSource: a small one over a streaming fetch.
+  w.EventSource = class {
+    constructor(url) {
+      this.listeners = {};
+      this.ctrl = new AbortController();
+      const run = async () => {
+        const headers = {};
+        const c = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
+        if (c) headers['Cookie'] = c;
+        const r = await fetch(new URL(url, base), { headers, signal: this.ctrl.signal });
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let at;
+          while ((at = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, at);
+            buf = buf.slice(at + 2);
+            let ev = 'message';
+            const data = [];
+            for (const line of block.split('\n')) {
+              if (line.startsWith('event: ')) ev = line.slice(7);
+              else if (line.startsWith('data: ')) data.push(line.slice(6));
+            }
+            if (data.length) (this.listeners[ev] || []).forEach(f => f({ data: data.join('\n') }));
+          }
+        }
+      };
+      run().catch(() => {});
+    }
+    addEventListener(ev, f) { (this.listeners[ev] = this.listeners[ev] || []).push(f); }
+    close() { this.ctrl.abort(); }
+  };
+  w.__streams = w.__streams || [];
   w.scrollTo = () => {};
   w.eval(await (await fetch(base + '/_live/live.js')).text());
   return w;
@@ -174,6 +211,23 @@ check(await until(() => w.location.pathname === '/' && d().querySelector('.who')
 check(!jar.quirk_session, 'the cookie is cleared');
 go('/account');
 check(await until(() => !!input('Password')), 'Account: the login page again');
+
+// Live updates: the page changes without the visitor doing anything.
+go('/live');
+check(await until(() => !!d().querySelector('.clock')), 'the Live page');
+const before = d().querySelector('.clock').textContent;
+check(await until(() => d().querySelector('.clock').textContent !== before, 3500), 'the clock ticks from the server: ' + d().querySelector('.clock').textContent);
+// A second tab: what one writes, the other shows.
+const w2 = await open('/live');
+const d2 = () => w2.document;
+check(await until(() => d().querySelector('.here').textContent.startsWith('2'), 3000), 'the first tab sees the second arrive: ' + d().querySelector('.here').textContent);
+const box2 = d2().querySelector('input[placeholder="Message"]');
+box2.value = 'hi from tab 2';
+box2.dispatchEvent(new w2.Event('input', { bubbles: true }));
+box2.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+check(await until(() => d().querySelector('.chat').textContent.includes('hi from tab 2'), 3000), 'tab 1 got tab 2\'s message, pushed');
+check(d().querySelector('.layout nav') === nav, 'the layout stayed (pushes only morph)');
+w2.close();
 
 console.log(failures ? failures + ' failed' : 'all passed');
 process.exit(failures ? 1 : 0);

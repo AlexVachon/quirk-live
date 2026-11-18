@@ -1,0 +1,112 @@
+// Live updates from the server: refresh, every, subscribe / publish.
+use web
+use live
+use test
+use sys
+
+_chat := []
+
+struct ChatPage : live.Page {
+    draft: String
+    seen: Int
+
+    define on_load(self) -> void {
+        self.draft = ""
+        self.seen = 0
+        self.subscribe("chat")
+    }
+
+    define send(self) -> void {
+        if self.draft == "" { return }
+        _chat.append(self.draft)
+        live.publish("chat", self.draft)
+        self.draft = ""
+    }
+
+    define on_message(self, topic: String, data: Any) -> void {
+        self.seen = self.seen + 1
+    }
+
+    define messages(self) -> List {
+        return _chat
+    }
+
+    define template(self) -> String {
+        return r"""<input model="draft" placeholder="Say" @enter="send()"><ul>{% for m in messages %}<li>{{ m }}</li>{% end %}</ul><p>seen {{ seen }}</p>"""
+    }
+}
+
+struct ClockPage : live.Page {
+    ticks: Int
+
+    define on_load(self) -> void {
+        self.ticks = 0
+        self.every(40, fn() { self.ticks = self.ticks + 1 })
+    }
+
+    define template(self) -> String {
+        return r"""<p>ticks {{ ticks }}</p>"""
+    }
+}
+
+struct Plain : live.Page {
+    define template(self) -> String {
+        return r"""<p>plain</p>"""
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/chat", ChatPage)
+    router.add("/clock", ClockPage)
+    router.add("/plain", Plain)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_publish_reaches_every_subscribed_page() -> void {
+    app := make_app()
+    a := live.TestSession(app)
+    b := live.TestSession(app)
+    a.open("/chat")
+    b.open("/chat")
+    test.assert_eq(live.subscribers("chat"), 2)
+    test.assert_false(a.receive())                              // nothing pushed yet
+    b.submit("Say", "hello from b")                             // b's event publishes
+    test.assert_true(b.html.contains("<li>hello from b</li>"))  // b sees it in its answer
+    test.assert_true(a.receive())                               // a gets it pushed
+    test.assert_true(a.html.contains("<li>hello from b</li>"), a.html)
+    test.assert_true(a.html.contains("seen 1"))
+    test.assert_false(a.receive())                              // once
+    live.publish("chat", "from a route")                       // from anywhere
+    test.assert_true(a.receive() and b.receive())
+    test.assert_true(a.html.contains("seen 2"))
+}
+
+define test_every_runs_while_the_page_is_open() -> void {
+    s := live.TestSession(make_app())
+    s.open("/clock")
+    sys.sleep(300)
+    test.assert_true(s.receive())
+    test.assert_false(s.html.contains("ticks 0"), s.html)
+    s.navigate("/plain")                                        // left: its timer stops
+    sys.sleep(150)
+    test.assert_false(s.receive())
+}
+
+define test_leaving_a_page_unsubscribes_it() -> void {
+    app := make_app()
+    a := live.TestSession(app)
+    a.open("/chat")
+    before := live.subscribers("chat")
+    a.navigate("/plain")
+    test.assert_eq(live.subscribers("chat"), before - 1)
+}
+
+define test_stream_for_an_unknown_page_asks_for_a_reload() -> void {
+    res := web.TestClient(make_app()).get("/_live/stream?id=nope")
+    sent: List = res._stream.sent
+    first: List = sent[0]
+    test.assert_eq(first[0], "reload")
+}

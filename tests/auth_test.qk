@@ -120,17 +120,17 @@ define test_logout_and_pages_left_open() -> void {
     s.type("Password", "secret")
     s.submit_form("Name", {})
     test.assert_true(s.html.contains("Account of bob"))
-    account_id := s.id
-    page_html := s.html
+    // The settings page in another tab of the same browser (same cookies).
+    other := live.TestSession(app)
+    other.client.cookies = s.client.cookies
+    other.open("/settings")
+    test.assert_true(other.html.contains("Settings of bob"))
     s.click("Log out")
     test.assert_true(s.location.startswith("/login"))
     test.assert_false(s.client.cookies.has("quirk_session"))
-    // The account page, still open in another tab: its next event bounces.
-    s.id = account_id
-    at := page_html.find("q-click=\"")
-    rest := page_html.substring(at + 9, page_html.length())
-    s.send(rest.substring(0, rest.find("\"")), {})
-    test.assert_true(s.location.startswith("/login?next="), s.location)
+    // The other tab's next click bounces to the login page.
+    other.click("Log out")
+    test.assert_true(other.location.startswith("/login?next="), other.location)
     s.open("/account")
     test.assert_eq(s.status, 302)
 }

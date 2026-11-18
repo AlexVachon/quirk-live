@@ -73,6 +73,12 @@ extern define field_names(obj: Any) -> List
 --- The struct's public method names. ---
 extern define method_names(obj: Any) -> List
 
+// live.publish: topic → the components subscribed to it.
+_topics := {}
+
+// The open pages: id → [component, last used (ms)].
+_sessions := {}
+
 // notify()'s defaults (live.notification_defaults).
 _note_defaults := {"position": "top-right", "duration": 4500, "max": 0}
 
@@ -119,6 +125,11 @@ struct Component {
     _hid: String          // its handler ids' prefix ("h"; a page in a layout: "p3h")
     _guard: Callable      // the route's guard (router.add(..., guard=))
     _now_req: web.Request // the request being handled (an event's), on the root
+    _dirty: Bool          // the root: changed since the browser last saw it (refresh)
+    _gone: Bool           // a page replaced in its layout: its timers stop
+    _streams: Int         // the root: browser streams connected now
+    _streamed: Bool       // the root: a browser stream has connected (a real tab)
+    _stream_left: Int     // the root: when the last stream ended (ms)
 
     define __init(self) -> void {
         self.id = ""
@@ -137,6 +148,76 @@ struct Component {
         self._hid = "h"
         self._guard = null
         self._now_req = null
+        self._dirty = false
+        self._gone = false
+        self._streams = 0
+        self._streamed = false
+        self._stream_left = 0
+    }
+
+    ---
+    Show the page again in the browser now — after a change that didn't come
+    from the visitor (a timer, another visitor's message, a background job).
+    Events don't need it: the page is shown again after each one anyway.
+    ---
+    define refresh(self) -> void {
+        self._root_of()._dirty = true
+    }
+
+    ---
+    Run `action()` every `ms` milliseconds while the page is open, then show
+    the page again: `self.every(1000, fn() { self.now = time.now() })`.
+    ---
+    define every(self, ms: Int, action: Callable) -> void {
+        _every_loop(self, ms, action)
+    }
+
+    ---
+    Get the messages `live.publish(topic, data)` sends — in `on_message`
+    (override it). Usually in `on_load`: `self.subscribe("chat")`.
+    ---
+    define subscribe(self, topic: String) -> void {
+        if not _topics.has(topic) { _topics[topic] = [] }
+        subs: List = _topics[topic]
+        for it in subs {
+            c: Component = it
+            if c == self { return }
+        }
+        subs.append(self)
+    }
+
+    --- Stop getting `topic`'s messages. ---
+    define unsubscribe(self, topic: String) -> void {
+        if not _topics.has(topic) { return }
+        kept := []
+        subs: List = _topics[topic]
+        for it in subs {
+            c: Component = it
+            if c != self { kept.append(c) }
+        }
+        _topics[topic] = kept
+    }
+
+    --- A message from `live.publish(topic, data)` (override); the page is shown again after it. ---
+    define on_message(self, topic: String, data: Any) -> void {
+    }
+
+    // Still on screen: its session is held, (in a layout) it's the page shown,
+    // and its tab's stream is connected — or was, less than 30 s ago (a
+    // reconnect) — or there never was one (no EventSource; a TestSession).
+    define _alive(self) -> Bool {
+        if self._gone { return false }
+        root := self._root_of()
+        if root.id == "" or not _sessions.has(root.id) { return false }
+        if root._streamed and root._streams == 0 and web.ms() - root._stream_left > 30000 { return false }
+        return true
+    }
+
+    // Here now (live.subscribers): its tab's stream is connected (or it never had one).
+    define _here(self) -> Bool {
+        if not self._alive() { return false }
+        root := self._root_of()
+        return root._streams > 0 or not root._streamed
     }
 
     --- Set up the component's state (override). Runs once, before it's first shown. ---
@@ -550,6 +631,7 @@ struct Layout : Component {
 
     // Show `page` (made for `req`) in the slot.
     define _enter(self, page: Component, req: web.Request) -> void {
+        if self.page != null { self.page._gone = true }
         self._serial = self._serial + 1
         page.request = req
         page._outer = self
@@ -2353,8 +2435,6 @@ define html(template: String, data: Map = {}) -> String {
 
 // ===== sessions =====
 
-// id → [component, last used (ms)]
-_sessions := {}
 _session_ttl_ms := [30 * 60 * 1000]
 
 define _store(comp: Component) -> String {
@@ -2388,6 +2468,64 @@ define _find(id: String) -> Component {
     entry[1] = web.now() * 1000
     c: Component = entry[0]
     return c
+}
+
+// Navigation left the page `from` (a new one replaces it in the tab): its
+// timers and subscriptions stop, its session goes.
+define _leave(r: web.Request) -> void {
+    if not r.query.has("from") { return }
+    old_id := String(r.query["from"])
+    if not _sessions.has(old_id) { return }
+    entry: List = _sessions[old_id]
+    old: Component = entry[0]
+    old._gone = true
+    _sessions.remove(old_id)
+}
+
+// Component.every: a task that runs `action` every `ms` while the page is on screen.
+async define _every_loop(comp: Component, ms: Int, action: Callable) {
+    wait := ms < 10 ? 10 : ms
+    while true {
+        sys.sleep(wait)
+        if not comp._alive() { return }
+        action()
+        comp.refresh()
+    }
+}
+
+---
+Send `data` to every page subscribed to `topic` (`self.subscribe(topic)`):
+each gets `on_message(topic, data)` and is shown again. From anywhere — an
+event of another visitor, a route, a timer:
+
+    live.publish("chat", {"from": self.user(), "text": self.draft})
+---
+define publish(topic: String, data: Any = null) -> void {
+    if not _topics.has(topic) { return }
+    kept := []
+    subs: List = _topics[topic]
+    for it in subs {
+        c: Component = it
+        if c._alive() { kept.append(c) }
+    }
+    _topics[topic] = kept
+    for it in kept {
+        c: Component = it
+        c.on_message(topic, data)
+        c.refresh()
+    }
+}
+
+--- How many pages subscribed to `topic` are open now (their tabs connected). ---
+define subscribers(topic: String) -> Int {
+    if not _topics.has(topic) { return 0 }
+    n := 0
+    subs: List = _topics[topic]
+    for it in subs {
+        c: Component = it
+        if c._here() { n = n + 1 }
+    }
+    return n
 }
 
 --- How long a page's component is kept after its last event (minutes; default 30). ---
@@ -2654,22 +2792,42 @@ _client_js := """(function () {
         root.setAttribute('q-root', res.id);
         morph(root, res.html);
         startTimers();
+        listen();
         if (res.title) document.title = res.title;
         if (push) history.pushState({}, '', path);
         window.scrollTo(0, 0);
       })
       .catch(function () { location.href = path; });
   }
+  // Live updates: one stream per page shown (refresh, every, publish).
+  var stream = null, streamId = null;
+  function listen() {
+    var root = document.querySelector('[q-root]');
+    if (!root || !window.EventSource) return;
+    var id = root.getAttribute('q-root');
+    if (stream && streamId === id) return;
+    if (stream) stream.close();
+    streamId = id;
+    stream = new EventSource('/_live/stream?id=' + encodeURIComponent(id));
+    stream.addEventListener('html', function (e) {
+      var res = JSON.parse(e.data);
+      queue = queue.then(function () {
+        var r = document.querySelector('[q-root]');
+        if (r && r.getAttribute('q-root') === id) apply(r, res);
+      });
+    });
+    stream.addEventListener('reload', function () { stream.close(); stream = null; location.reload(); });
+  }
   window.addEventListener('popstate', function () { navigate(location.pathname + location.search, false); });
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startTimers);
-  else startTimers();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { startTimers(); listen(); });
+  else { startTimers(); listen(); }
 })();
 """
 
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.5.0-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.6.0-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====
@@ -2897,7 +3055,43 @@ define _install_on(app: web.Router) -> void {
             rs.json({"redirect": comp._go})
             return
         }
+        comp._dirty = false
         rs.json({"html": _body(comp), "title": comp.title()})
+    })
+    // The page's live updates (refresh / every / publish), as Server-Sent Events.
+    app.get("/_live/stream", fn(req, res) {
+        r: web.Request = req
+        rs: web.Response = res
+        id := r.query.has("id") ? String(r.query["id"]) : ""
+        stream := rs.event_stream()
+        comp := _find(id)
+        if comp == null {
+            stream.send("reload", "")
+            return
+        }
+        quiet := 0
+        comp._streams = comp._streams + 1
+        comp._streamed = true
+        while stream.open {
+            if comp._dirty {
+                comp._dirty = false
+                stream.send("html", json.dumps({"html": _body(comp), "title": comp.title()}))
+                quiet = 0
+            } else {
+                quiet = quiet + 1
+                if quiet >= 50 {                      // ~5 s: keep the line awake, notice a closed tab
+                    stream.ping()
+                    quiet = 0
+                }
+            }
+            if _find(id) == null {                    // expired / replaced
+                stream.send("reload", "")
+                break
+            }
+            sys.sleep(100)
+        }
+        comp._streams = comp._streams - 1
+        comp._stream_left = web.ms()
     })
     app.get("/_live/nav", fn(req, res) {
         r: web.Request = req
@@ -2932,10 +3126,12 @@ define _install_on(app: web.Router) -> void {
                     }
                     maker: Callable = entry[2]
                     comp := _make_in_layout(maker, factory, nav)
+                    _leave(r)
                     rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
                     return
                 }
                 comp := _make(factory, nav)
+                _leave(r)
                 rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
                 return
             }
@@ -3268,6 +3464,16 @@ struct TestSession {
             i = i - 1
         }
         return _attr_of(tag, attr, marker)
+    }
+
+    --- Take what the server pushed (refresh / every / publish), as the browser would; false if nothing. ---
+    define receive(self) -> Bool {
+        comp := _find(self.id)
+        if comp == null or not comp._dirty { return false }
+        comp._dirty = false
+        self.html = _body(comp)
+        self.title = comp.title()
+        return true
     }
 
     --- Follow a `q-link` to `path`. ---

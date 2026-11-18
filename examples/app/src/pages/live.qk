@@ -1,0 +1,53 @@
+use live
+use sys
+
+// Messages of the chat below, for every visitor (in the server's memory).
+chat_log := []
+
+// Updates that don't come from the visitor: a clock ticking on the server,
+// and a chat — open it in two tabs and write in one.
+struct LivePage : live.Page {
+    seconds: Int
+    draft: String
+
+    define on_load(self) -> void {
+        self.seconds = 0
+        self.draft = ""
+        self.every(1000, fn() { self.seconds = self.seconds + 1 })   // then the page is shown again
+        self.subscribe("chat")
+        live.publish("chat", null)                                    // the others: one more here
+    }
+
+    define send(self) -> void {
+        text := self.draft.trim()
+        if text == "" { return }
+        who := self.user() != null ? String(self.user()) : "someone"
+        chat_log.append(who + ": " + text)
+        self.draft = ""
+        live.publish("chat", text)                                    // every open chat page
+    }
+
+    define messages(self) -> List {
+        return chat_log
+    }
+
+    define here(self) -> Int {
+        return live.subscribers("chat")
+    }
+
+    define title(self) -> String {
+        return "Live"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Live</h1>
+            <p class="clock">Open for {{ seconds }} s</p>
+            <h2>Chat <small class="here">{{ here }} here</small></h2>
+            <ul class="chat">
+              {% for m in messages %}<li>{{ m }}</li>{% else %}<li class="empty">No messages yet</li>{% end %}
+            </ul>
+            <input model="draft" placeholder="Message" @enter="send()">
+        """
+    }
+}
