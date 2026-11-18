@@ -1,13 +1,13 @@
-// The demo's Notification component: an enum prop, a method in the
-// template, @after timers, emit to the parent, keyed children.
+// The demo's Notification component, on the counter page: an enum prop,
+// methods in the template, @after timers, emit to the parent, keyed children.
 use web
 use live
 use test
-from examples.app.src.notifications use { NotificationsPage }
+from examples.app.src.pages.counter use { CounterPage }
 
 define make_app() -> web.App {
     router := live.Router()
-    router.add("/", NotificationsPage)
+    router.add("/", CounterPage)
     app := web.App()
     app.mount("/", router)
     return app
@@ -17,54 +17,35 @@ define count(html: String, piece: String) -> Int {
     return html.split(piece).length() - 1
 }
 
-define test_statuses_icons_and_roles() -> void {
+define test_milestones_show_notifications() -> void {
     s := live.TestSession(make_app())
     s.open("/")
-    test.assert_true(s.html.contains("class=\"notification info\" role=\"status\""), s.html)
-    test.assert_true(s.html.contains("<strong>Hello</strong>"))
-    test.assert_true(s.html.contains("delay=\"6000\""))
-    s.click("Error (stays)")
-    test.assert_true(s.html.contains("class=\"notification error\" role=\"alert\""))
-    test.assert_true(s.html.contains(">✕</span>"))
-    test.assert_true(s.html.contains("Connection lost"))
-    test.assert_eq(count(s.html, "class=\"time-left\""), 1)         // the error has no timeout
-    test.assert_eq(s.title, "Notifications (2)")
+    test.assert_eq(count(s.html, "class=\"notification "), 0)
+    s.click("+10")
+    test.assert_true(s.html.contains("class=\"notification success\" role=\"status\""), s.html)
+    test.assert_true(s.html.contains("<p>You reached 10!</p>"))
+    test.assert_true(s.html.contains(">✓</span>"))
+    test.assert_true(s.html.contains("delay=\"4000\""))
+    s.click("reset")
+    test.assert_true(s.html.contains("<p>Counter reset.</p>"))
+    test.assert_true(s.html.contains("class=\"notification info\""))
+    s.click("−1")
+    test.assert_true(s.html.contains("class=\"notification warning\" role=\"alert\""))
+    test.assert_eq(count(s.html, "class=\"notification "), 3)
+    test.assert_eq(count(s.html, "class=\"time-left\""), 2)         // the warning has no timeout
 }
 
 define test_close_and_timers() -> void {
     s := live.TestSession(make_app())
     s.open("/")
-    s.click("Success")
-    s.click("Error (stays)")
+    s.click("+10")
+    s.click("reset")
+    s.click("−1")
     test.assert_eq(count(s.html, "class=\"notification "), 3)
-    s.click("×")                                                     // closes the first (Hello)
-    test.assert_false(s.html.contains("Hello"))
-    test.assert_eq(count(s.html, "class=\"notification "), 2)
-    s.run_timers()                                                   // the success one times out
+    s.run_timers()                                                   // success and info time out
     test.assert_eq(count(s.html, "class=\"notification "), 1)
-    test.assert_true(s.html.contains("Connection lost"))             // timeout 0: stays
-    s.click("Clear all")
+    test.assert_true(s.html.contains("The count is below zero."))    // timeout 0: stays
+    s.click("×")
     test.assert_eq(count(s.html, "class=\"notification "), 0)
-}
-
-define test_custom_form() -> void {
-    s := live.TestSession(make_app())
-    s.open("/")
-    s.type("Your message", "Deploy finished")
-    s.choose("Warning")
-    s.send(_model_id(s.html, "type=\"number\""), {"value": "2500"})
-    s.submit_form("Your message", {})
-    test.assert_true(s.html.contains("<p>Deploy finished</p>"))
-    test.assert_true(s.html.contains("class=\"notification warning\""))
-    test.assert_true(s.html.contains("delay=\"2500\""))
-    test.assert_true(s.html.contains("value=\"\" placeholder=\"Your message\""))
-}
-
-// The model= handler of the input whose tag contains `marker`.
-define _model_id(html: String, marker: String) -> String {
-    at := html.find(marker)
-    rest := html.substring(at, html.length())
-    q := rest.find("q-input=\"")
-    tail := rest.substring(q + 9, rest.length())
-    return tail.substring(0, tail.find("\""))
+    test.assert_true(s.html.contains("<p class=\"count\">-1</p>"))   // the counter is unchanged
 }

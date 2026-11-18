@@ -1,0 +1,81 @@
+use live
+from src.components.notification use { Notification }
+
+struct CounterPage : live.Page {
+    count: Int
+    notes: List          // the notifications shown: Maps with id, status, message, timeout
+    next_note: Int
+
+    define on_load(self) -> void {
+        self.count = 0
+        self.notes = []
+        self.next_note = 1
+    }
+
+    define add(self, n: Int) -> void {
+        before := self.count
+        self.count = self.count + n
+        if before < 10 and self.count >= 10 { self.notify("Success", "You reached 10!", 4000) }
+        if before >= 0 and self.count < 0 { self.notify("Warning", "The count is below zero.", 0) }
+    }
+
+    define reset(self) -> void {
+        self.count = 0
+        self.notify("Info", "Counter reset.", 2000)
+    }
+
+    define notify(self, status: String, message: String, timeout: Int) -> void {
+        self.notes.append({"id": self.next_note, "status": status, "message": message, "timeout": timeout})
+        self.next_note = self.next_note + 1
+    }
+
+    // A Notification closed (its × or its timeout).
+    define dismiss(self, id: Int) -> void {
+        kept := []
+        for it in self.notes {
+            n: Map = it
+            if Int(n["id"]) != id { kept.append(n) }
+        }
+        self.notes = kept
+    }
+
+    define title(self) -> String {
+        return "Counter (" + String(self.count) + ")"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <section class="counter">
+              <h1>Counter</h1>
+              <p class="count">{{ count }}</p>
+              <div class="buttons">
+                <button @click="add(-1)">−1</button>
+                <PlusButton :page="self" :step="1" />
+                <PlusButton :page="self" :step="10" />
+                <button @click="reset">reset</button>
+              </div>
+              {% if count >= 10 %}<p class="note">That's a lot!</p>{% end %}
+            </section>
+            <div class="notifications" aria-live="polite">
+              {% for n in notes %}
+                <Notification :key="n.id" message="{{ n.message }}" :status="n.status"
+                              :timeout="n.timeout" @dismiss="dismiss(n.id)" />
+              {% end %}
+            </div>
+        """
+    }
+}
+
+// A component of your own, used in the page's template as <PlusButton />.
+struct PlusButton : live.Component {
+    page: CounterPage
+    step: Int
+
+    define press(self) -> void {
+        self.page.add(self.step)
+    }
+
+    define template(self) -> String {
+        return r"""<button class="plus" @click="press">+{{ step }}</button>"""
+    }
+}

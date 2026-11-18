@@ -5,8 +5,6 @@ nav { display: flex; gap: 1rem; margin-bottom: 1rem; }
 ul { padding-left: 1.2rem; }
 
 /* Notifications */
-.custom { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0; }
-.custom input[type=number] { width: 6rem; }
 .notifications { position: fixed; top: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .5rem; width: 22rem; max-width: calc(100vw - 2rem); }
 .notification { position: relative; overflow: hidden; display: flex; gap: .75rem; align-items: flex-start;
                 padding: .75rem 1rem; border-radius: .5rem; background: #fff; color: #1d2330;

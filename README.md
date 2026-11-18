@@ -102,8 +102,9 @@ define main() -> void {
 
 `quirk new --live myapp` makes such a project. The demo — a counter, a todo
 list with live search, notifications that close themselves, navigation — is
-in `examples/app` (`src/notifications.qk` is a complete component: an enum
-status, an icon, a timeout, a close button):
+in `examples/app`: pages in `src/pages/`, components in `src/components/`
+(`components/notification` is a complete one: an enum status, an icon, a
+timeout, a close button; the counter page shows them):
 `cd examples/app && quirk run main.qk`, then open http://localhost:3000.
 
 ## Components
@@ -240,7 +241,8 @@ template gets a numbered handler; the script sends each event as JSON to
 `/_live/event`; the server finds the page by its ID (128 random bits), calls
 the method, renders the page again, and answers with the new HTML, which the
 script morphs into the page — the field you're typing in keeps its focus and
-text, and unchanged elements stay as they are. Events are sent in order, and
+text, unchanged elements stay as they are, and a component's element is
+matched by its key (moved, not rewritten, when a list changes). Events are sent in order, and
 typing that hasn't been sent yet goes before a click. Links ask `/_live/nav`
 for the next page. Every interaction is a round trip, so live suits forms,
 dashboards, lists and admin pages; it's not for offline use or animations.

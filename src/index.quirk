@@ -548,6 +548,7 @@ struct _Ctx {
     counts: Map
     select_value: Any
     has_select: Bool
+    root_key: String     // set until the component's first element is written: its q-key
 
     define __init(self, root: Component, comp: Component, key: String) -> void {
         self.root = root
@@ -559,6 +560,7 @@ struct _Ctx {
         self.counts = {}
         self.select_value = null
         self.has_select = false
+        self.root_key = ""
     }
 
     define lookup(self, name: String) -> Any {
@@ -972,12 +974,20 @@ define _render_tag(node: _TNode, ctx: _Ctx) -> String {
             }
         }
     }
+    // A component's first element carries its key: the browser matches it
+    // by key when the page changes (moved, not rewritten — a list keeps
+    // each item's own element).
+    if ctx.root_key != "" {
+        attrs = attrs + " q-key=\"" + web.escape(ctx.root_key) + "\""
+        ctx.root_key = ""
+    }
     // @after: the browser runs it `delay` ms after the element appears. The
     // timer belongs to this component (its key), not to a DOM position.
     if events.has("q-after") {
         n := ctx.counts.has("@after") ? Int(ctx.counts["@after"]) : 0
         ctx.counts["@after"] = n + 1
-        attrs = attrs + " q-after-key=\"" + web.escape(ctx.key + "@" + String(n)) + "\""
+        // (the page's id too: another visit to the page has the same keys)
+        attrs = attrs + " q-after-key=\"" + web.escape(ctx.root.id + ctx.key + "@" + String(n)) + "\""
     }
     for q in events.keys() {
         qn: String = q
@@ -1034,6 +1044,7 @@ define _render_comp(node: _TNode, ctx: _Ctx) -> String {
     }
     if fresh { child._start() }
     inner := _Ctx(root, child, key)
+    inner.root_key = key
     inner.slot = node.children
     inner.slot_ctx = ctx
     return _render_nodes(_parse_template(_template_of(child)), inner)
@@ -1976,11 +1987,28 @@ _client_js := """(function () {
     t.innerHTML = html;
     patchChildren(root, t);
   }
+  function keyOf(n) { return n && n.nodeType === 1 ? n.getAttribute('q-key') : null; }
   function patchChildren(a, b) {
-    var i, bc = b.childNodes;
+    var i, k, bc = b.childNodes, want, cur, key, match;
     for (i = 0; i < bc.length; i++) {
-      if (i >= a.childNodes.length) a.appendChild(bc[i].cloneNode(true));
-      else patch(a.childNodes[i], bc[i]);
+      want = bc[i];
+      cur = a.childNodes[i] || null;
+      key = keyOf(want);
+      if (key) {
+        // A component's element: the one with its key, moved here if need be.
+        match = null;
+        for (k = i; k < a.childNodes.length; k++) if (keyOf(a.childNodes[k]) === key) { match = a.childNodes[k]; break; }
+        if (match) {
+          if (match !== cur) a.insertBefore(match, cur);
+          patch(match, want);
+        } else {
+          a.insertBefore(want.cloneNode(true), cur);
+        }
+        continue;
+      }
+      if (!cur) a.appendChild(want.cloneNode(true));
+      else if (keyOf(cur)) a.insertBefore(want.cloneNode(true), cur);
+      else patch(cur, want);
     }
     while (a.childNodes.length > bc.length) a.removeChild(a.lastChild);
   }
@@ -2070,6 +2098,9 @@ _client_js := """(function () {
         var root = document.querySelector('[q-root]');
         if (res.reload || !res.id || !root) { location.href = path; return; }
         root.setAttribute('q-root', res.id);
+        var t;
+        for (t in afterTimers) clearTimeout(afterTimers[t]);
+        afterTimers = {};
         afterDone = {};
         morph(root, res.html);
         startTimers();

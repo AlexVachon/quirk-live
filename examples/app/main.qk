@@ -1,5 +1,5 @@
 // The live demo app: quirk run main.qk, then open http://localhost:3000
-// index.html is the base page; src/ has the pages and components (struct + template).
+// index.html is the base page; src/pages/ has the pages, src/components/ the components.
 use web
 use sys
 from router use { router }
