@@ -3,7 +3,7 @@
 use web
 use live
 use test
-from examples.app.src.notifications use { NotificationsPage, Notification }
+from examples.app.src.notifications use { NotificationsPage }
 
 define make_app() -> web.App {
     router := live.Router()
