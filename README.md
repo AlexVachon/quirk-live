@@ -130,7 +130,8 @@ are re-read when they change.
 | `{{ count }}` | a field (or a method with no arguments), escaped |
 | `{{ item.text }}` · `{{ items.length }}` · `{{ total() }}` | fields of fields, Map keys, lengths, method calls |
 | `{{ html \| raw }}` | not escaped |
-| `{% if count >= 10 and not done %} … {% elif … %} … {% else %} … {% end %}` | `== != < > <= >=`, `and or not`, `+ - * / %` |
+| `{% if count >= 10 and not done %} … {% elif … %} … {% else %} … {% end %}` | `== != < > <= >=`, `and or not`, `+ - * / %`, `cond ? a : b` |
+| `{{ name.upper() }}` · `{{ path.startswith('/admin') }}` | String methods: `startswith`, `endswith`, `contains`, `upper`, `lower`, `trim`, `find`, `replace`; `list.contains(x)`, `map.has(k)` |
 | `{% for item in items %} … {% else %} … {% end %}` | `else`: the list is empty; `{% for i, item in items %}` with the index (Maps: key, value) |
 | `<button @click="save">` | calls `self.save()`; `@click="add(1)"` with arguments (evaluated when shown) |
 | `@submit="save"` (a form) | `save(fields)` — a Map of the form's fields |
@@ -220,6 +221,53 @@ way out.
 
 `q-pause-hover` on an element with `@after` stops its timer while the mouse
 is on it.
+
+## Layouts
+
+What some pages are shown in — a sidebar, a header, an admin area — that
+**stays** while you go from one of them to another: only its `<slot />`, the
+page, changes. Its fields keep their values (an open menu stays open, a
+half-typed search keeps its text); the browser updates only the page.
+
+```quirk
+struct MainLayout : live.Layout {
+    menu_open: Bool
+
+    define on_load(self) -> void { self.menu_open = false }      // once
+    define toggle(self) -> void { self.menu_open = not self.menu_open }
+
+    define template(self) -> String {
+        return r"""
+            <aside>
+              <button @click="toggle">Menu</button>
+              <a href="/" q-link :class="path == '/' ? 'active' : ''">Home</a>
+              <a href="/todos" q-link :class="path == '/todos' ? 'active' : ''">Todos</a>
+            </aside>
+            <section><slot /></section>
+        """
+    }
+}
+```
+
+and in `router.qk`:
+
+```quirk
+main := router.group(layout=MainLayout)
+main.add("/", HomePage)
+main.add("/todos", TodoPage)
+
+router.add("/login", LoginPage)                  // no layout
+router.add("/about", AboutPage, layout=MainLayout)   // or one page at a time
+```
+
+- `self.path` is the current path, `self.page` the page shown;
+  `on_navigate(path)` runs each time the page changes (and for the first).
+- The page is an ordinary page: its own fields, `on_load`, events,
+  `title()` (the window's title), `notify`, `go`.
+- Going to a page with another layout, or none, replaces everything.
+- Notifications belong to the layout: they stay when the page changes.
+
+`index.html` stays the outer page of the whole app.
 
 ## The base page
 

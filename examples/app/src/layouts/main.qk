@@ -1,0 +1,38 @@
+use live
+
+---
+What the app's pages are shown in: the navigation, and a scratchpad that
+keeps its text while you move between pages — only the <slot /> changes.
+---
+struct MainLayout : live.Layout {
+    scratch: String
+    pages_seen: Int
+
+    define on_load(self) -> void {
+        self.scratch = ""
+        self.pages_seen = 0
+    }
+
+    define on_navigate(self, path: String) -> void {
+        self.pages_seen = self.pages_seen + 1
+    }
+
+    define template(self) -> String {
+        return r"""
+            <div class="layout">
+              <nav>
+                <a href="/" q-link :class="path == '/' ? 'active' : ''">Counter</a>
+                <a href="/todos" q-link :class="path == '/todos' ? 'active' : ''">Todos</a>
+                <a href="/hello/world" q-link :class="path.startswith('/hello') ? 'active' : ''">Hello</a>
+              </nav>
+              <section class="page">
+                <slot />
+              </section>
+              <aside class="scratchpad">
+                <input model="scratch" placeholder="Scratchpad (kept between pages)">
+                <small>{{ pages_seen }} page{{ pages_seen == 1 ? '' : 's' }} in this layout</small>
+              </aside>
+            </div>
+        """
+    }
+}

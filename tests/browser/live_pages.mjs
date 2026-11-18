@@ -1,5 +1,5 @@
 // Drive live.js in a real DOM (jsdom) against examples/app (template components).
-// cd examples/app && quirk run main.qk      then: node live_pages.mjs http://localhost:3000
+// cd examples/app && PORT=3000 quirk run _browser_main.qk    then: node live_pages.mjs http://localhost:3000
 import { JSDOM } from 'jsdom';
 const base = process.argv[2];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -82,7 +82,9 @@ const note = (text) => notes().find(n => n.textContent.includes(text));
 // (a corner still playing its leave transition doesn't count: in jsdom,
 // animations never end, so it stays until the 1.5 s fallback)
 const corner = (pos) => d().querySelector('.q-notifications-' + pos + ':not([q-leaving])');
-check(notes().length === 0 && !corner('top-right'), 'no notifications yet');
+// (notifications belong to the layout: the one from the first visit outlives
+// the page change, as in Element Plus — wait for it to close on its own)
+check(await until(() => notes().length === 0 && !corner('top-right'), 7000), 'the earlier notification closes by itself (it outlived the page change)');
 button('+10').click();
 check(await until(() => !!note('You reached 10!')), '+10: a success notification');
 check(corner('top-right') && corner('top-right').contains(note('You reached 10!')), 'in the top-right corner');
@@ -115,6 +117,26 @@ check(corner('bottom-right').contains(note('below zero')) && note('below zero').
 note('below zero').querySelector('.q-notification-close').click();
 check(await until(() => !note('below zero')), '× closes it');
 check(await until(() => d().querySelector('.closed') && d().querySelector('.closed').textContent.includes('notifications closed: 3')), 'on_close ran for each: ' + (d().querySelector('.closed') || {}).textContent);
+
+// MainLayout: it stays while you go between its pages; only the page changes.
+const link = (href) => [...d().querySelectorAll('a[q-link]')].find(a => a.getAttribute('href') === href);
+const go = (href) => link(href).dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+const scratch = () => d().querySelector('.scratchpad input');
+const nav = d().querySelector('.layout nav');
+const rootId = d().querySelector('[q-root]').getAttribute('q-root');
+check(link('/').classList.contains('active'), 'the layout marks the current page\'s link');
+type(scratch(), 'remember me');
+await sleep(400);                                                    // the typing reaches the server
+go('/todos');
+check(await until(() => !!input('Something to do')), 'Todos, in the same layout');
+check(d().querySelector('.layout nav') === nav, 'the layout\'s elements are the same (not rebuilt)');
+check(d().querySelector('[q-root]').getAttribute('q-root') === rootId, 'the same layout object on the server');
+check(scratch().value === 'remember me', 'the scratchpad kept its text');
+check(link('/todos').classList.contains('active') && !link('/').classList.contains('active'), 'the active link moved');
+check(/[0-9]+ pages in this layout/.test(d().querySelector('.scratchpad small').textContent), 'on_navigate counted: ' + d().querySelector('.scratchpad small').textContent);
+go('/hello/world');
+check(await until(() => !!d().getElementById('hello')) && scratch().value === 'remember me', 'Hello too, the text still there');
+check(link('/hello/world').classList.contains('active'), 'path.startswith(\'/hello\') marks it');
 
 console.log(failures ? failures + ' failed' : 'all passed');
 process.exit(failures ? 1 : 0);

@@ -1,0 +1,178 @@
+// live.Layout: what some pages are shown in, kept while you move between
+// them — only its <slot /> (the page) changes.
+use web
+use live
+use test
+
+struct MainLayout : live.Layout {
+    menu_open: Bool
+    loads: Int
+    visits: Int
+
+    define on_load(self) -> void {
+        self.menu_open = false
+        self.loads = self.loads + 1
+        self.visits = 0
+    }
+
+    define on_navigate(self, path: String) -> void {
+        self.visits = self.visits + 1
+    }
+
+    define toggle(self) -> void {
+        self.menu_open = not self.menu_open
+    }
+
+    define template(self) -> String {
+        return r"""<aside>menu {{ menu_open ? 1 : 0 }}{% if menu_open %} open{% end %} loads={{ loads }} visits={{ visits }} at={{ path }}<button @click="toggle">Menu</button>{% if path == "/" %}<b>home-active</b>{% end %}</aside><section><slot /></section>"""
+    }
+}
+
+struct HomePage : live.Page {
+    count: Int
+
+    define on_load(self) -> void {
+        self.count = 0
+    }
+
+    define add(self) -> void {
+        self.count = self.count + 1
+        if self.count == 3 { self.notify("three!", type="success") }
+    }
+
+    define title(self) -> String {
+        return "Home " + String(self.count)
+    }
+
+    define template(self) -> String {
+        return r"""<p>home {{ count }}</p><button @click="add">add</button><button @click="go_todos">to todos</button>"""
+    }
+
+    define go_todos(self) -> void {
+        self.go("/todos")
+    }
+}
+
+struct TodoPage : live.Page {
+    define template(self) -> String {
+        return r"""<p>todos page</p>"""
+    }
+}
+
+// A widget page in a layout.
+struct WidgetPage : live.Page {
+    n: Int
+
+    define on_load(self) -> void {
+        self.n = 0
+    }
+
+    define build(self) -> live.Widget {
+        return live.Column([live.Label("widgets " + String(self.n)), live.Button("inc", on_click=fn() { self.n = self.n + 1 })])
+    }
+}
+
+struct PlainPage : live.Page {
+    define template(self) -> String {
+        return r"""<p>plain, no layout</p>"""
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    main := router.group(layout=MainLayout)
+    main.add("/", HomePage)
+    main.add("/todos", TodoPage)
+    router.add("/widgets", WidgetPage, layout=MainLayout)
+    router.add("/plain", PlainPage)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_layout_wraps_the_page() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("<section><p>home 0</p>"), s.html)
+    test.assert_true(s.html.contains("loads=1 visits=1 at=/"))
+    test.assert_true(s.html.contains("home-active"))
+    test.assert_true(s.html.contains("<title>Home 0</title>"))               // the page's title
+    s.click("add")                                                           // the page's handler
+    test.assert_true(s.html.contains("home 1"))
+    test.assert_eq(s.title, "Home 1")
+}
+
+define test_layout_state_is_kept_across_its_pages() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    id := s.id
+    s.click("Menu")                                                          // the layout's handler
+    test.assert_true(s.html.contains("menu 1 open"))
+    s.click("add")
+    s.navigate("/todos")
+    test.assert_eq(s.id, id)                                                 // the same layout
+    test.assert_true(s.html.contains("menu 1 open"), s.html)                 // its state kept
+    test.assert_true(s.html.contains("loads=1 visits=2 at=/todos"))          // on_load once, on_navigate twice
+    test.assert_true(s.html.contains("<section><p>todos page</p></section>"))
+    test.assert_false(s.html.contains("home-active"))
+    s.navigate("/")
+    test.assert_true(s.html.contains("home 0"))                              // a new page: its own state anew
+    test.assert_true(s.html.contains("menu 1 open"))
+    test.assert_true(s.html.contains("visits=3"))
+}
+
+define test_widget_pages_notify_and_go_inside_a_layout() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    s.click("add")
+    s.click("add")
+    s.click("add")                                                           // notify from the page
+    test.assert_true(s.html.contains("<p class=\"q-notification-message\">three!</p>"), s.html)
+    s.click("to todos")                                                      // go() from the page
+    test.assert_eq(s.location, "/todos")
+    test.assert_true(s.html.contains("todos page"))
+    s.navigate("/widgets")
+    test.assert_true(s.html.contains("widgets 0"))
+    s.click("inc")                                                           // a widget's event, through the layout
+    test.assert_true(s.html.contains("widgets 1"), s.html)
+    test.assert_true(s.html.contains("at=/widgets"))
+}
+
+define test_leaving_the_layout_and_stale_events() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    id := s.id
+    old := s.html
+    s.click("Menu")
+    s.navigate("/plain")                                                     // no layout: all replaced
+    test.assert_true(s.id != id)
+    test.assert_true(s.html.contains("plain, no layout"))
+    test.assert_false(s.html.contains("<aside>"))
+    s.navigate("/")                                                          // a new layout
+    test.assert_true(s.html.contains("menu 0"))
+    test.assert_true(s.html.contains("loads=1 visits=1"))
+    // A click on the page that's gone (its handler id) does nothing.
+    at := old.find("q-click=\"p1h")
+    rest := old.substring(at + 9, old.length())
+    s.navigate("/todos")
+    s.send(rest.substring(0, rest.find("\"")), {})
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("todos page"))
+}
+
+struct Probe : live.Component {
+    name: String
+    tags: List
+
+    define template(self) -> String {
+        return r"""{{ name.startswith('ad') ? 'A' : 'B' }}{{ name.upper() }}{{ name.replace('a', 'o') }}{{ tags.contains('x') }}{{ 2 > 1 ? 'yes' : 'no' }}"""
+    }
+}
+
+define test_template_ternary_and_string_methods() -> void {
+    p := Probe()
+    p.name = "ada"
+    p.tags = ["x"]
+    test.assert_true(p._root_html().contains(">AADAodotrueyes<"), p._root_html())
+}

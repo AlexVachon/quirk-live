@@ -3,9 +3,13 @@ from live use { Router }
 from src.pages.counter use { CounterPage }
 from src.pages.todos use { TodoPage }
 from src.pages.hello use { HelloPage }
+from src.layouts.main use { MainLayout }
 
 router = Router()
 
-router.add("/", CounterPage)
-router.add("/todos", TodoPage)
-router.add("/hello/:name", HelloPage)
+// These pages are shown in MainLayout: it stays while you go from one to
+// another, only its <slot /> (the page) changes.
+main := router.group(layout=MainLayout)
+main.add("/", CounterPage)
+main.add("/todos", TodoPage)
+main.add("/hello/:name", HelloPage)

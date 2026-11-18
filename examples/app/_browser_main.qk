@@ -1,0 +1,11 @@
+// (test entry for tests/browser: the demo on $PORT; not part of the app)
+use web
+use sys
+from router use { router }
+
+define main() -> void {
+    app := web.App()
+    app.use(web.static("public"))
+    app.mount("/", router)
+    app.listen(Int(sys.getenv("PORT")))
+}

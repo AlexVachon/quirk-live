@@ -1,0 +1,7 @@
+/* MainLayout (src/layouts/main.qk) */
+.layout nav { display: flex; gap: 1rem; margin-bottom: 1rem; }
+.layout nav a { text-decoration: none; padding-bottom: 2px; }
+.layout nav a.active { font-weight: 700; border-bottom: 2px solid currentColor; }
+.scratchpad { margin-top: 2rem; display: flex; flex-direction: column; gap: .25rem; }
+.scratchpad input { padding: .4rem .5rem; }
+.scratchpad small { color: #6b7280; }

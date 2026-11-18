@@ -114,6 +114,8 @@ struct Component {
     _next: Int
     _notes: List          // the root's notifications (live.notify)
     _note_next: Int
+    _outer: Component     // a page inside a live.Layout: that layout
+    _hid: String          // its handler ids' prefix ("h"; a page in a layout: "p3h")
 
     define __init(self) -> void {
         self.id = ""
@@ -128,6 +130,8 @@ struct Component {
         self._next = 0
         self._notes = []
         self._note_next = 1
+        self._outer = null
+        self._hid = "h"
     }
 
     --- Set up the component's state (override). Runs once, before it's first shown. ---
@@ -156,8 +160,9 @@ struct Component {
 
     --- After this event, send the browser to `path` (a live page, or any URL). ---
     define go(self, path: String) -> void {
-        if self._root != null and self._root != self {
-            self._root.go(path)
+        root := self._root_of()
+        if root != self {
+            root.go(path)
             return
         }
         self._go = path
@@ -221,9 +226,20 @@ struct Component {
         for i in ids { _close_note(root, Int(i), true) }
     }
 
+    // The session's root: a page's layout, a component's page (and its layout).
     define _root_of(self) -> Component {
-        if self._root != null and self._root != self { return self._root }
+        if self._outer != null { return self._outer._root_of() }
+        if self._root != null and self._root != self { return self._root._root_of() }
         return self
+    }
+
+    // What a `<slot />` with no enclosing tag shows: a Layout's page.
+    define _slot_html(self) -> String {
+        return ""
+    }
+
+    // A Layout shows `page` (made for `req`); other components: nothing.
+    define _enter(self, page: Component, req: web.Request) -> void {
     }
 
     --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
@@ -434,6 +450,96 @@ _notes_css := """<style>
 @media (prefers-reduced-motion: reduce) { .q-note-right-enter, .q-note-left-enter, .q-note-right-leave, .q-note-left-leave { animation-duration: .01s; } }
 </style>"""
 
+
+// ===== layouts =====
+
+---
+What some pages are shown in — a sidebar, a header, an admin area — that
+stays while you go from one of them to another: only its `<slot />`, the
+page, changes. Its fields keep their values (an open menu stays open);
+`on_load` runs once, `on_navigate(path)` each time the page changes.
+
+    struct MainLayout : live.Layout {
+        menu_open: Bool
+
+        define on_load(self) -> void { self.menu_open = false }
+        define toggle(self) -> void { self.menu_open = not self.menu_open }
+
+        define template(self) -> String {
+            return r"""
+                <aside><button @click="toggle">Menu</button>
+                  <a href="/" q-link :class="path == '/' ? 'active' : ''">Home</a></aside>
+                <section><slot /></section>
+            """
+        }
+    }
+
+    main := router.group(layout=MainLayout)
+    main.add("/", HomePage)
+    main.add("/todos", TodoPage)
+
+`self.path` is the current path, `self.page` the page shown.
+---
+struct Layout : Component {
+    page: Component
+    path: String
+    _serial: Int
+
+    define __init(self) -> void {
+        super().__init()
+        self.page = null
+        self.path = ""
+        self._serial = 0
+    }
+
+    --- The page changed (also for the first one): `path` is its path (override). ---
+    define on_navigate(self, path: String) -> void {
+    }
+
+    --- The layout's HTML, with `<slot />` where the page goes (override). ---
+    define template(self) -> String {
+        return "<slot />"
+    }
+
+    --- The page's title, or the layout's own (override). ---
+    define title(self) -> String {
+        if self.page != null { return self.page.title() }
+        return ""
+    }
+
+    // Show `page` (made for `req`) in the slot.
+    define _enter(self, page: Component, req: web.Request) -> void {
+        self._serial = self._serial + 1
+        page.request = req
+        page._outer = self
+        page.id = self.id + "-p" + String(self._serial)
+        page._hid = "p" + String(self._serial) + "h"
+        self.page = page
+        self.path = req.path
+        page._start()
+        self.on_navigate(req.path)
+    }
+
+    define _slot_html(self) -> String {
+        if self.page == null { return "" }
+        return self.page.render()
+    }
+
+    // The layout's own handlers ("h3"), else the page's.
+    define handle(self, event: String, data: Map) -> void {
+        first := event.split(" ")[0]
+        if self._handlers != null and self._handlers.has(String(first)) {
+            _dispatch(self, event, data)
+            return
+        }
+        if self.page != null { self.page.handle(event, data) }
+    }
+
+    define _widget(self, text: String) -> Widget {
+        if self.page == null { return null }
+        return self.page._widget(text)
+    }
+}
 
 // ===== templates: parsing =====
 
@@ -761,7 +867,7 @@ define _etokens(src: String) -> List {
             if two == "==" or two == "!=" or two == "<=" or two == ">=" {
                 out.append(["op", two])
                 i = i + 2
-            } elif "<>+-*/%(),.!".contains(c) {
+            } elif "<>+-*/%(),.!?:".contains(c) {
                 out.append(["op", c == "!" ? "not" : c])
                 i = i + 1
             } else {
@@ -816,7 +922,7 @@ struct _Ctx {
 
     define eval(self, src: String) -> Any {
         e := _Eval(_etokens(src), self, src)
-        v := e.or_expr()
+        v := e.ternary()
         if e.pos < e.toks.length() { _tfail("can't read '" + src + "'") }
         return v
     }
@@ -847,6 +953,17 @@ struct _Eval {
     define take(self, want: String) -> void {
         if self.peek() != want { _tfail("'" + want + "' expected in '" + self.src + "'") }
         self.pos = self.pos + 1
+    }
+
+    // `cond ? a : b` (lowest precedence; right-associative).
+    define ternary(self) -> Any {
+        v := self.or_expr()
+        if self.peek() != "?" { return v }
+        self.pos = self.pos + 1
+        yes := self.ternary()
+        self.take(":")
+        no := self.ternary()
+        return _truthy(v) ? yes : no
     }
 
     define or_expr(self) -> Any {
@@ -928,7 +1045,7 @@ struct _Eval {
             return out
         }
         while true {
-            out.append(self.or_expr())
+            out.append(self.ternary())
             if self.peek() == "," {
                 self.pos = self.pos + 1
             } else {
@@ -947,7 +1064,7 @@ struct _Eval {
             name: String = t[1]
             self.pos = self.pos + 1
             if self.peek() == "(" {
-                v = call_method(v, name, self.args())
+                v = _call(v, name, self.args())
             } else {
                 v = _member(v, name)
             }
@@ -968,7 +1085,7 @@ struct _Eval {
         }
         if kind == "op" {
             if value == "(" {
-                v := self.or_expr()
+                v := self.ternary()
                 self.take(")")
                 return v
             }
@@ -982,6 +1099,40 @@ struct _Eval {
         }
         return self.ctx.lookup(value)
     }
+}
+
+// `v.name(args)` in a template: String / List / Map methods, or a struct's.
+define _call(v: Any, name: String, args: List) -> Any {
+    if v is String {
+        s: String = v
+        a := args.length() > 0 ? _text(args[0]) : ""
+        if name == "startswith" { return s.startswith(a) }
+        if name == "endswith" { return s.endswith(a) }
+        if name == "contains" { return s.contains(a) }
+        if name == "upper" { return s.upper() }
+        if name == "lower" { return s.lower() }
+        if name == "trim" { return s.trim() }
+        if name == "find" { return s.find(a) }
+        if name == "replace" and args.length() > 1 { return s.replace(a, _text(args[1])) }
+        if name == "length" { return s.length() }
+        _tfail("a String has no method '" + name + "' in templates (startswith, endswith, contains, upper, lower, trim, find, replace, length)")
+    }
+    if v is List {
+        l: List = v
+        if name == "length" { return l.length() }
+        if name == "contains" {
+            for it in l { if _equal(it, args[0]) { return true } }
+            return false
+        }
+        _tfail("a List has no method '" + name + "' in templates (length, contains)")
+    }
+    if v is Map {
+        m: Map = v
+        if name == "has" or name == "contains" { return m.has(_text(args[0])) }
+        if name == "length" { return m.keys().length() }
+        _tfail("a Map has no method '" + name + "' in templates (has, length)")
+    }
+    return call_method(v, name, args)
 }
 
 define _member(v: Any, name: String) -> Any {
@@ -1154,7 +1305,8 @@ define _handler_for(spec: String, ctx: _Ctx) -> List {
 define _register(ctx: _Ctx, h: List) -> String {
     root := ctx.root
     root._next = root._next + 1
-    id := "h" + String(root._next)
+    prefix := root._hid == null or root._hid == "" ? "h" : root._hid
+    id := prefix + String(root._next)
     root._handlers[id] = h
     return id
 }
@@ -1377,7 +1529,11 @@ define _render_nodes(nodes: List, ctx: _Ctx) -> String {
         } elif k == "comp" {
             out = out + _render_comp(node, ctx)
         } elif k == "slot" {
-            if ctx.slot_ctx != null { out = out + _render_nodes(ctx.slot, ctx.slot_ctx) }
+            if ctx.slot_ctx != null {
+                out = out + _render_nodes(ctx.slot, ctx.slot_ctx)
+            } else {
+                out = out + ctx.comp._slot_html()           // a Layout: its page
+            }
         }
     }
     return out
@@ -2433,16 +2589,21 @@ _client_js := """(function () {
     runTimer(key, t.left);
   });
   function navigate(path, push) {
-    fetch('/_live/nav?path=' + encodeURIComponent(path))
+    var here = document.querySelector('[q-root]');
+    var from = here ? '&from=' + encodeURIComponent(here.getAttribute('q-root')) : '';
+    fetch('/_live/nav?path=' + encodeURIComponent(path) + from)
       .then(function (r) { return r.json(); })
       .then(function (res) {
         var root = document.querySelector('[q-root]');
         if (res.reload || !res.id || !root) { location.href = path; return; }
+        // (a layout that stays keeps its timers; a new page drops the old ones)
+        if (!res.kept) {
+          var t;
+          for (t in afterTimers) clearTimeout(afterTimers[t].id);
+          afterTimers = {};
+          afterDone = {};
+        }
         root.setAttribute('q-root', res.id);
-        var t;
-        for (t in afterTimers) clearTimeout(afterTimers[t].id);
-        afterTimers = {};
-        afterDone = {};
         morph(root, res.html);
         startTimers();
         if (res.title) document.title = res.title;
@@ -2460,7 +2621,7 @@ _client_js := """(function () {
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.3.0-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.4.0-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====
@@ -2513,6 +2674,18 @@ define page(app: web.App, path: String, factory: Callable) -> void {
         comp := _make(factory, r)
         rs.html(_page_html(comp))
     })
+}
+
+// A new layout (stored as the session) showing a new page.
+define _make_in_layout(layout: Callable, factory: Callable, req: web.Request) -> Component {
+    lay: Component = layout()
+    lay.request = req
+    _store(lay)
+    lay._start()
+    page: Component = factory(req)
+    if page == null { throw web.HttpError(500, "live: the page factory returned null") }
+    lay._enter(page, req)
+    return lay
 }
 
 define _make(factory: Callable, req: web.Request) -> Component {
@@ -2675,6 +2848,21 @@ define _install_on(app: web.Router) -> void {
             if params != null {
                 nav.params = params
                 factory: Callable = entry[1]
+                kind: String = entry.length() > 3 ? String(entry[3]) : ""
+                if kind != "" {
+                    // Same layout as the page we're on: it stays, only its page changes.
+                    here := r.query.has("from") ? _find(String(r.query["from"])) : null
+                    if here != null and type_name(here) == kind {
+                        page: Component = factory(nav)
+                        here._enter(page, nav)
+                        rs.json({"id": here.id, "html": _body(here), "title": here.title(), "kept": true})
+                        return
+                    }
+                    maker: Callable = entry[2]
+                    comp := _make_in_layout(maker, factory, nav)
+                    rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
+                    return
+                }
                 comp := _make(factory, nav)
                 rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
                 return
@@ -2705,17 +2893,49 @@ struct Router : web.Router {
         super().__init()
     }
 
-    --- Serve the page struct `page` (its name: `router.add("/", HomePage)`) at `path`. ---
-    define add(self, path: String, page: Callable) -> Router {
+    ---
+    Serve the page struct `page` (its name: `router.add("/", HomePage)`) at
+    `path` — in the live.Layout `layout`, if given (a group does that for
+    several pages).
+    ---
+    define add(self, path: String, page: Callable, layout: Callable = null) -> Router {
         _install_on(self)
         make := fn(req) { return page() }
-        _pages.append([web.Route("GET", path, make), make])
+        kind := ""
+        if layout != null {
+            probe := layout()
+            kind = type_name(probe)
+            if not has_field(probe, "_serial") { throw ValueError("live: router.add(layout=...): " + kind + " isn't a live.Layout") }
+        }
+        _pages.append([web.Route("GET", path, make), make, layout, kind])
         self.get(path, fn(req, res) {
             r: web.Request = req
             rs: web.Response = res
-            comp := _make(make, r)
+            comp := layout != null ? _make_in_layout(layout, make, r) : _make(make, r)
             rs.html(_page_html(comp))
         })
+        return self
+    }
+
+    --- Pages sharing the live.Layout `layout`: `main := router.group(layout=MainLayout)`, then `main.add("/", HomePage)`. ---
+    define group(self, layout: Callable) -> RouteGroup {
+        return RouteGroup(self, layout)
+    }
+}
+
+--- Routes in one layout (Router.group). ---
+struct RouteGroup {
+    router: Router
+    layout: Callable
+
+    define __init(self, router: Router, layout: Callable) -> void {
+        self.router = router
+        self.layout = layout
+    }
+
+    --- Serve `page` at `path`, in the group's layout. ---
+    define add(self, path: String, page: Callable) -> RouteGroup {
+        self.router.add(path, page, layout=self.layout)
         return self
     }
 }
@@ -2949,7 +3169,7 @@ struct TestSession {
 
     --- Follow a `q-link` to `path`. ---
     define navigate(self, path: String) -> TestSession {
-        res := self.client.get("/_live/nav?path=" + path)
+        res := self.client.get("/_live/nav?path=" + path + (self.id != "" ? "&from=" + self.id : ""))
         self.status = res.status_code
         m: Map = json.loads(res.body)
         self.location = path
