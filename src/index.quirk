@@ -2287,7 +2287,10 @@ _client_js := """(function () {
     if (a.nodeType !== 1) return;
     var i, name, focused = a === document.activeElement && a !== forced;
     for (i = a.attributes.length - 1; i >= 0; i--) { name = a.attributes[i].name; if (!b.hasAttribute(name)) a.removeAttribute(name); }
+    // (an entrance still playing keeps its class through an update)
+    var tr = a.getAttribute('q-transition'), entering = tr && a.classList.contains(tr + '-enter');
     for (i = 0; i < b.attributes.length; i++) { name = b.attributes[i].name; if (a.getAttribute(name) !== b.attributes[i].value) a.setAttribute(name, b.attributes[i].value); }
+    if (entering) a.classList.add(tr + '-enter');
     if (a.nodeName === 'INPUT') {
       if (!focused) {
         if (a.type === 'checkbox' || a.type === 'radio') a.checked = b.hasAttribute('checked');
@@ -2415,6 +2418,12 @@ _client_js := """(function () {
 })();
 """
 
+// The script's URL with its version: a new live is picked up at once (the
+// browser kept an older script for an hour, so new features — transitions —
+// did nothing until then).
+_live_js_url := "/_live/live.js?v=2.2.1-" + String(web.byte_length(_client_js))
+
+
 // ===== serving =====
 
 // [pattern Route, factory] per live page, for navigation without a reload.
@@ -2477,6 +2486,10 @@ define _make(factory: Callable, req: web.Request) -> Component {
 }
 
 define _page_html(comp: Component) -> String {
+    return _page_html_raw(comp).replace("src=\"/_live/live.js\"", "src=\"" + _live_js_url + "\"")
+}
+
+define _page_html_raw(comp: Component) -> String {
     t := comp.title()
     head: String = _settings["head"]
     body := comp._root_html()
@@ -2578,9 +2591,11 @@ define _install_on(app: web.Router) -> void {
     }
     _installed.append(app)
     app.get("/_live/live.js", fn(req, res) {
+        r: web.Request = req
         rs: web.Response = res
         rs.set("Content-Type", "text/javascript; charset=utf-8")
-        rs.set("Cache-Control", "public, max-age=3600")
+        // The versioned URL never changes its content; the bare one might.
+        rs.set("Cache-Control", r.query.has("v") ? "public, max-age=31536000, immutable" : "no-cache")
         rs.send(_client_js)
     })
     app.post("/_live/event", fn(req, res) {
