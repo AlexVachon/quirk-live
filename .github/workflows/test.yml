@@ -1,0 +1,72 @@
+# live's checks, on every push: the Quirk tests (TestSession), then the
+# browser script in jsdom and in headless Chromium against the demos.
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    # Quirk's Linux release is built on Ubuntu 20.04 (LLVM 14, OpenSSL 1.1):
+    # run it in the same image.
+    container:
+      image: ubuntu:20.04
+      options: --dns 8.8.8.8 --dns 1.1.1.1 --ipc=host
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      QUIRK_HOME: /root/.quirk
+    steps:
+      - name: System packages (Quirk's run-time libraries)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gnupg git
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/focal/ llvm-toolchain-focal-14 main" > /etc/apt/sources.list.d/llvm-14.list
+          apt-get update
+          apt-get install -y --no-install-recommends libllvm14 libgc1c2 libssl1.1
+
+      - uses: actions/checkout@v4
+
+      - name: Install Quirk (the latest release)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/AlexVachon/quirk/main/install.sh | sh
+          echo "$QUIRK_HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Quirk tests
+        run: |
+          quirk --version
+          quirk test tests
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Browser checks — dependencies
+        working-directory: tests/browser
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Browser checks
+        run: |
+          (cd examples/app && PORT=3000 quirk run _browser_main.qk > /tmp/app.log 2>&1 &)
+          (PORT=3001 quirk run examples/demo.qk > /tmp/demo.log 2>&1 &)
+          for i in $(seq 1 120); do curl -s -o /dev/null localhost:3000/ && curl -s -o /dev/null localhost:3001/ && break; sleep 1; done
+          cd tests/browser
+          node live_dom.mjs http://localhost:3001
+          node live_pages.mjs http://localhost:3000
+          node real_browser.mjs http://localhost:3000 /tmp/screenshots
+
+      - name: Screenshots and server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-check
+          path: |
+            /tmp/screenshots
+            /tmp/app.log
+            /tmp/demo.log
+          if-no-files-found: ignore

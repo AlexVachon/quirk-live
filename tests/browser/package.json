@@ -2,6 +2,9 @@
   "name": "live-browser-check",
   "private": true,
   "type": "module",
-  "description": "Checks live.js in a real DOM (jsdom) against a running live app",
-  "devDependencies": { "jsdom": "^24.0.0" }
+  "description": "Checks live.js against a running live app: in jsdom (live_dom.mjs, live_pages.mjs) and in headless Chromium (real_browser.mjs)",
+  "devDependencies": {
+    "jsdom": "^24.0.0",
+    "playwright": "1.48.2"
+  }
 }

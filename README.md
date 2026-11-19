@@ -382,9 +382,16 @@ define test_counter() -> void {
 
 `html` is the page's current HTML, `title` its title, `location` its path.
 
-`tests/browser/` checks the browser script itself, in a real DOM (Node +
-jsdom): `cd tests/browser && npm install && node live_pages.mjs http://localhost:3000`
-while `examples/app` runs.
+`tests/browser/` checks the browser script itself, against the demo app
+running (`cd examples/app && PORT=3000 quirk run _browser_main.qk`):
+
+- in jsdom — `cd tests/browser && npm install && node live_pages.mjs http://localhost:3000`;
+- in a real, headless Chromium — `npx playwright install chromium` once, then
+  `node real_browser.mjs http://localhost:3000 [screenshots-folder]`: CSS
+  animations ending, where things are on the screen, the mouse and the
+  keyboard, EventSource, HttpOnly cookies.
+
+GitHub Actions runs all of it on every push (`.github/workflows/test.yml`).
 
 ## Widgets (pages in Quirk only)
 
