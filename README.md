@@ -107,8 +107,8 @@ list with live search, notifications, navigation — is in `examples/app`
 Its todos are kept in SQLite (`src/store.qk`, the
 [`sqlite`](https://github.com/AlexVachon/quirk-sqlite) package, in
 `todos.db`): still there after a restart, shared by every visitor, and
-changed in every open tab at once (`live.publish`). The demo needs Quirk
-7.51.0 or later.
+changed in every open tab at once (`live.publish`); accounts are real (sign up,
+passwords hashed with scrypt). The demo needs Quirk 7.55.0 or later.
 
 **While you work: `quirk run --watch main.qk`** (Quirk 7.52.0+). Each time you
 save a `.qk`, `.html`, `.css` or `.js` file of the project, the server is
@@ -265,7 +265,7 @@ struct SignupPage : live.Page {
   ("Enter a whole number"), the field keeping its last value.
 - **Testing:** `s.blur("Email")` leaves a field; then look at `s.html`.
 
-The demo's login page (`examples/app/src/pages/login.qk`) uses it.
+The demo's sign-up and login pages (`examples/app/src/pages/signup.qk`, `login.qk`) use it.
 
 ## Notifications
 
@@ -436,6 +436,14 @@ struct LoginPage : live.Page {
 - In pages, layouts and components: `self.login(user)`, `self.logout()`,
   `self.user()` (in templates: `{% if user %}…{{ user }}…{% end %}`), and
   `self.session()` for anything else to keep (`self.session().set("cart", items)`).
+
+**Accounts.** Store passwords with `crypto.hash_password` (scrypt, salted)
+and check them with `crypto.verify_password` — never the password itself, nor
+a plain `sha256`. The demo has it all: `/signup` (validation, "that email
+already has an account"), `/login` against the `users` table, and
+`src/store.qk` (the schema through `db.migrate`, rows as structs with
+`query_as`, and a login that takes as long whether or not the email has an
+account).
 
 ## Live updates from the server
 

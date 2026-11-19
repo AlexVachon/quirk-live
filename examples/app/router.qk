@@ -4,6 +4,7 @@ from src.pages.counter use { CounterPage }
 from src.pages.todos use { TodoPage }
 from src.pages.hello use { HelloPage }
 from src.pages.login use { LoginPage }
+from src.pages.signup use { SignupPage }
 from src.pages.account use { AccountPage }
 from src.pages.live use { LivePage }
 from src.pages.settings use { SettingsPage }
@@ -21,6 +22,7 @@ main.add("/todos", TodoPage)
 main.add("/hello/:name", HelloPage)
 main.add("/live", LivePage)
 main.add("/login", LoginPage)
+main.add("/signup", SignupPage)
 
 // A group inside `main`: these pages are in AccountLayout, itself in
 // MainLayout's slot — and for logged-in visitors only (others go to /login,

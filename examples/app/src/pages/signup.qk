@@ -1,0 +1,65 @@
+use live
+from src.store use { email_taken, create_user }
+
+---
+A new account: its rules() are checked as you leave each field and when you
+submit; "already has an account" is what only the server knows. The password
+is stored as a scrypt hash (crypto.hash_password), never as itself.
+---
+struct SignupPage : live.Page {
+    name: String
+    email: String
+    password: String
+    confirm: String
+
+    define on_load(self) -> void {
+        self.name = ""
+        self.email = ""
+        self.password = ""
+        self.confirm = ""
+    }
+
+    define rules(self) -> Map {
+        return {
+            "name":     [live.required("Your name, please"), live.max_length(40)],
+            "email":    [live.required("Your email, please"), live.email()],
+            "password": [live.required("A password, please"), live.min_length(8)],
+            "confirm":  [live.check(fn(v) => v == self.password, "The passwords don't match")],
+        }
+    }
+
+    define submit(self) -> void {
+        if not self.valid() { return }
+        if email_taken(self.email) {
+            self.set_error("email", "That email already has an account — log in instead")
+            return
+        }
+        create_user(self.name, self.email, self.password)
+        self.login(self.name.trim())
+        self.notify("Welcome, " + self.name.trim() + "! Your account is ready.", type="success", duration=3000)
+        next := self.query("next")
+        self.go(next != "" ? next : "/account")
+    }
+
+    define title(self) -> String {
+        return "Sign up"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Sign up</h1>
+            <form class="login" @submit="submit">
+              <input model="name" placeholder="Name" autocomplete="name">
+              <FieldError field="name" />
+              <input type="email" model="email" placeholder="Email" autocomplete="email">
+              <FieldError field="email" />
+              <input type="password" model="password" placeholder="Password" autocomplete="new-password">
+              <FieldError field="password" />
+              <input type="password" model="confirm" placeholder="Password again" autocomplete="new-password">
+              <FieldError field="confirm" />
+              <button>Create the account</button>
+            </form>
+            <p>Already have one? <a href="/login" q-link>Log in</a></p>
+        """
+    }
+}

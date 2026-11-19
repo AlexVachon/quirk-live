@@ -1,5 +1,5 @@
 use live
-from src.store use { db }
+from src.store use { db, Todo }
 
 ---
 The todos are in the app's SQLite database (src/store.qk): they're still
@@ -46,9 +46,9 @@ struct TodoPage : live.Page {
         live.publish("todos")
     }
 
-    // The todos matching the search (read on each render, so always current).
+    // The todos matching the search, as Todo structs (read on each render, so always current).
     define shown(self) -> List {
-        return db().query("SELECT id, text, done FROM todos WHERE instr(lower(text), lower(?)) > 0 ORDER BY id", [self.filter.trim()])
+        return db().query_as(Todo, "SELECT id, text, done FROM todos WHERE instr(lower(text), lower(?)) > 0 ORDER BY id", [self.filter.trim()])
     }
 
     define left(self) -> Int {
@@ -70,7 +70,7 @@ struct TodoPage : live.Page {
             <input model="filter" placeholder="Search">
             <ul>
               {% for item in shown %}
-                <TodoRow :id="item.id" :text="item.text" :done="item.done == 1" :key="item.id" @remove="remove" @toggle="toggle" />
+                <TodoRow :id="item.id" :text="item.text" :done="item.done" :key="item.id" @remove="remove" @toggle="toggle" />
               {% else %}
                 <li class="empty">Nothing here</li>
               {% end %}

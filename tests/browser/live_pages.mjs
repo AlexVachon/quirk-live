@@ -213,18 +213,29 @@ check(await until(() => !!input('Password')), 'Account (guarded): the login page
 check(w.location.pathname === '/login' && w.location.search.includes('next='), 'URL: ' + w.location.pathname + w.location.search);
 // Validation (rules()): leaving an empty field shows its error; typing clears it.
 const shownError = () => [...d().querySelectorAll('.q-error')].filter(p => !p.hidden).map(p => p.textContent.trim()).join(' | ');
-input('Name').focus();
-input('Name').dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
-check(await until(() => shownError() === 'Your name, please'), 'leaving the empty name: its error (' + shownError() + ')');
-check(input('Name').getAttribute('aria-invalid') === 'true', 'the input says it\'s invalid (aria-invalid)');
+const submitForm = () => d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+input('Email').focus();
+input('Email').dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
+check(await until(() => shownError() === 'Your email, please'), 'leaving the empty email: its error (' + shownError() + ')');
+check(input('Email').getAttribute('aria-invalid') === 'true', 'the input says it\'s invalid (aria-invalid)');
+type(input('Email'), 'ada@example.com');
+check(await until(() => shownError() === '' && !input('Email').hasAttribute('aria-invalid')), 'typing an email clears it');
+type(input('Password'), 'not an account');
+submitForm();
+check(await until(() => shownError() === 'Wrong email or password'), 'no such account: its error, from the server (' + shownError() + ')');
+// Sign up (the password is stored as a scrypt hash), then you're in.
+go('/signup');
+check(await until(() => !!input('Password again')), 'the sign-up page');
 type(input('Name'), 'ada');
-check(await until(() => shownError() === '' && !input('Name').hasAttribute('aria-invalid')), 'typing a name clears it');
-type(input('Password'), 'wrong');
-d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
-check(await until(() => shownError().includes('Wrong password')), 'a wrong password: its error, from the server (' + shownError() + ')');
-type(input('Password'), 'quirk');
-d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
-check(await until(() => !!d().querySelector('.account')), 'logged in: back to Account');
+type(input('Email'), 'ada@example.com');
+type(input('Password'), 'short');
+type(input('Password again'), 'short');
+submitForm();
+check(await until(() => shownError() === 'At least 8 characters'), 'a short password: refused (' + shownError() + ')');
+type(input('Password'), 'analytical engine');
+type(input('Password again'), 'analytical engine');
+submitForm();
+check(await until(() => !!d().querySelector('.account'), 4000), 'signed up: the account page');
 check(w.location.pathname === '/account', 'URL: ' + w.location.pathname);
 check(d().querySelector('.account').textContent.includes('ada') && d().querySelector('.who').textContent.includes('ada'), 'the page and the layout know who');
 check(!!jar.quirk_session, 'the session cookie is set');
@@ -249,6 +260,12 @@ check(await until(() => w.location.pathname === '/' && d().querySelector('.who')
 check(!jar.quirk_session, 'the cookie is cleared');
 go('/account');
 check(await until(() => !!input('Password')), 'Account: the login page again');
+// Logging in with the account: its stored hash checked.
+type(input('Email'), 'ADA@example.com');                     // any case
+type(input('Password'), 'analytical engine');
+submitForm();
+check(await until(() => !!d().querySelector('.account'), 4000), 'logged in with the new account');
+check(await until(() => !!note('Welcome back, ada!')), 'welcomed back');
 
 // Live updates: the page changes without the visitor doing anything.
 go('/live');

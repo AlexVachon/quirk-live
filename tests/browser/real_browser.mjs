@@ -107,21 +107,26 @@ check(new URL(page.url()).pathname === '/hello/world', 'Forward: hello again');
 // ---- Login: the cookie is HttpOnly ----
 await page.click('a[href="/account"]');
 await page.waitForSelector('input[placeholder="Password"]');
-// Validation: Tab out of the empty name — its error; typing clears it.
-await page.click('input[placeholder="Name"]');
+// Validation: Tab out of the empty email — its error; typing clears it.
+await page.click('input[placeholder="Email"]');
 await page.keyboard.press('Tab');
-await page.waitForFunction(() => [...document.querySelectorAll('.q-error')].some(p => !p.hidden && p.textContent.includes('Your name')), null, { timeout: 4000 }).catch(() => {});
-check(await page.locator('.q-error:not([hidden])').count() === 1 && (await page.locator('.q-error:not([hidden])').textContent()).includes('Your name'), 'Tab out of an empty name: its error');
-check(await page.locator('input[placeholder="Name"]').getAttribute('aria-invalid') === 'true', 'and the input is aria-invalid');
+await page.waitForFunction(() => [...document.querySelectorAll('.q-error')].some(p => !p.hidden && p.textContent.includes('Your email')), null, { timeout: 4000 }).catch(() => {});
+check(await page.locator('.q-error:not([hidden])').count() === 1 && (await page.locator('.q-error:not([hidden])').textContent()).includes('Your email'), 'Tab out of an empty email: its error');
+check(await page.locator('input[placeholder="Email"]').getAttribute('aria-invalid') === 'true', 'and the input is aria-invalid');
 const focusedPh = await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('placeholder'));
 check(focusedPh === 'Password', 'the focus moved on to Password (' + focusedPh + ')');
-await page.fill('input[placeholder="Name"]', 'ada');
-await page.fill('input[placeholder="Password"]', 'quirk');
-await page.locator('input[placeholder="Password"]').dispatchEvent('input');
+// An account of its own (whatever ran before): sign up.
+await page.click('form + p a[href="/signup"]');
+await page.waitForSelector('input[placeholder="Password again"]');
+await page.fill('input[placeholder="Name"]', 'grace');
+await page.fill('input[placeholder="Email"]', 'grace@example.com');
+await page.fill('input[placeholder="Password"]', 'compiler 1952');
+await page.fill('input[placeholder="Password again"]', 'compiler 1952');
+await page.locator('input[placeholder="Password again"]').dispatchEvent('input');
 await page.waitForTimeout(300);
 await page.click('form.login button');
 await page.waitForSelector('.account');
-check((await page.textContent('.account')).includes('ada'), 'logged in: the account page');
+check((await page.textContent('.account')).includes('grace'), 'signed up and in: the account page');
 const cookies = await context.cookies();
 const sess = cookies.find(c => c.name === 'quirk_session');
 check(sess && sess.httpOnly && sess.sameSite === 'Lax', 'the session cookie: HttpOnly, SameSite=Lax');

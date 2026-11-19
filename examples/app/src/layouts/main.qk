@@ -33,7 +33,7 @@ struct MainLayout : live.Layout {
                 <a href="/live" q-link :class="path == '/live' ? 'active' : ''">Live</a>
                 <a href="/account" q-link :class="path.startswith('/account') ? 'active' : ''">Account</a>
                 <span class="who">
-                  {% if user %}{{ user }} · <button class="link" @click="sign_out">Log out</button>{% else %}<a href="/login" q-link>Log in</a>{% end %}
+                  {% if user %}{{ user }} · <button class="link" @click="sign_out">Log out</button>{% else %}<a href="/login" q-link>Log in</a> · <a href="/signup" q-link>Sign up</a>{% end %}
                 </span>
               </nav>
               <section class="page">

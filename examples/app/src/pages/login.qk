@@ -1,32 +1,35 @@
 use live
+from src.store use { check_login, User }
 
-// A demo login: any name, password "quirk". A real app checks a database.
-// Validation: rules() is checked as you leave each field and on submit;
-// set_error() shows what only the server knows (a wrong password).
+// Log in with an account made on /signup. The password is checked against
+// its stored scrypt hash; a wrong email and a wrong password get the same
+// answer (which emails have an account isn't given away).
 struct LoginPage : live.Page {
-    name: String
+    email: String
     password: String
 
     define on_load(self) -> void {
-        self.name = ""
+        self.email = ""
         self.password = ""
     }
 
     define rules(self) -> Map {
         return {
-            "name":     [live.required("Your name, please"), live.max_length(30)],
-            "password": [live.required("The password, please (it's quirk)")],
+            "email":    [live.required("Your email, please"), live.email()],
+            "password": [live.required("Your password, please")],
         }
     }
 
     define submit(self) -> void {
         if not self.valid() { return }
-        if self.password != "quirk" {
-            self.set_error("password", "Wrong password — try quirk")
+        found := check_login(self.email, self.password)
+        if found == null {
+            self.set_error("password", "Wrong email or password")
             return
         }
-        self.login(self.name.trim())
-        self.notify("Welcome, " + self.name.trim() + "!", type="success", duration=3000)
+        u: User = found
+        self.login(u.name)
+        self.notify("Welcome back, " + u.name + "!", type="success", duration=3000)
         next := self.query("next")
         self.go(next != "" ? next : "/account")
     }
@@ -39,12 +42,13 @@ struct LoginPage : live.Page {
         return r"""
             <h1>Log in</h1>
             <form class="login" @submit="submit">
-              <input model="name" placeholder="Name" autocomplete="username">
-              <FieldError field="name" />
+              <input type="email" model="email" placeholder="Email" autocomplete="username">
+              <FieldError field="email" />
               <input type="password" model="password" placeholder="Password" autocomplete="current-password">
               <FieldError field="password" />
               <button>Log in</button>
             </form>
+            <p>No account yet? <a href="/signup" q-link>Sign up</a></p>
         """
     }
 }

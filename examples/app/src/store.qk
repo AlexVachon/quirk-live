@@ -1,10 +1,19 @@
 // The app's database: one SQLite file, todos.db next to main.qk — what's
-// in it is still there after a restart. Opened (and the table made) the
-// first time it's needed; every page shares the one connection.
+// in it is still there after a restart. Opened the first time it's
+// needed (its schema brought up to date by migrate); every page shares
+// the one connection.
 use sqlite
+use crypto
 
 db_path: String = "todos.db"
 _db: sqlite.Database = null
+
+// The schema, one step per change. Only ever add steps at the end:
+// a database that has had the first ones only gets the new ones.
+schema := [
+    "CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, password TEXT NOT NULL, created TEXT NOT NULL DEFAULT (datetime('now'))); CREATE UNIQUE INDEX users_email ON users (email COLLATE NOCASE)",
+]
 
 // Use another file (or ":memory:") — before the first db().
 define use_database(path: String) -> void {
@@ -14,16 +23,65 @@ define use_database(path: String) -> void {
 define db() -> sqlite.Database {
     if _db == null {
         _db = sqlite.open(db_path)
-        _db.script("""
-            CREATE TABLE IF NOT EXISTS todos (
-                id   INTEGER PRIMARY KEY,
-                text TEXT NOT NULL,
-                done INTEGER NOT NULL DEFAULT 0
-            )
-        """)
+        _db.migrate(schema)
         if Int(_db.value("SELECT count(*) FROM todos")) == 0 {
             _db.execute_many("INSERT INTO todos (text) VALUES (?)", [["buy milk"], ["write docs"]])
         }
     }
     return _db
+}
+
+// A row of `todos`, as db().query_as(Todo, …) gives it.
+struct Todo {
+    id: Int
+    text: String
+    done: Bool
+}
+
+// ----- accounts -----
+
+// A row of `users` (the password column is its scrypt hash, never the password).
+struct User {
+    id: Int
+    name: String
+    email: String
+    password: String
+}
+
+define _email_key(email: String) -> String {
+    return email.trim().lower()
+}
+
+define email_taken(email: String) -> Bool {
+    return db().value("SELECT 1 FROM users WHERE email = ? COLLATE NOCASE", [_email_key(email)]) != null
+}
+
+// A new account; its id.
+define create_user(name: String, email: String, password: String) -> Int {
+    return db().insert("INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+                       [name.trim(), _email_key(email), crypto.hash_password(password)])
+}
+
+// The user with this email and password, or null. Takes as long when the
+// email has no account (a hash is checked either way): how fast it says no
+// doesn't tell which emails have one.
+define check_login(email: String, password: String) -> User {
+    found := db().query_one_as(User, "SELECT * FROM users WHERE email = ? COLLATE NOCASE", [_email_key(email)])
+    if found == null {
+        crypto.verify_password(password, _dummy_hash())
+        return null
+    }
+    u: User = found
+    if not crypto.verify_password(password, u.password) { return null }
+    if crypto.needs_rehash(u.password) {                    // older settings: store it the current way
+        db().execute("UPDATE users SET password = ? WHERE id = ?", [crypto.hash_password(password), u.id])
+    }
+    return u
+}
+
+_dummy: List = []
+
+define _dummy_hash() -> String {
+    if _dummy.length() == 0 { _dummy.append(crypto.hash_password("not anyone's password")) }
+    return String(_dummy[0])
 }
