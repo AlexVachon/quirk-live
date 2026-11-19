@@ -103,12 +103,19 @@ define main() -> void {
 `quirk new --live myapp` makes such a project. The demo — a counter, a todo
 list with live search, notifications, navigation — is in `examples/app`
 (pages in `src/pages/`):
-`cd examples/app && quirk run main.qk`, then open http://localhost:3000.
+`cd examples/app && quirk run --watch main.qk`, then open http://localhost:3000.
 Its todos are kept in SQLite (`src/store.qk`, the
 [`sqlite`](https://github.com/AlexVachon/quirk-sqlite) package, in
 `todos.db`): still there after a restart, shared by every visitor, and
 changed in every open tab at once (`live.publish`). The demo needs Quirk
 7.51.0 or later.
+
+**While you work: `quirk run --watch main.qk`** (Quirk 7.52.0+). Each time you
+save a `.qk`, `.html`, `.css` or `.js` file of the project, the server is
+checked and started again, and the open tabs reload by themselves. If what you
+saved doesn't compile, the errors are shown and the running version keeps
+running. (What a page holds — fields, a half-typed form — starts anew; what's
+in a database, or in the session's cookie, stays.)
 
 ## Components
 

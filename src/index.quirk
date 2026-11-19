@@ -3031,7 +3031,7 @@ _client_js := """(function () {
       .catch(function () { location.href = path; });
   }
   // Live updates: one stream per page shown (refresh, every, publish).
-  var stream = null, streamId = null;
+  var stream = null, streamId = null, retryMs = 250;
   function listen() {
     var root = document.querySelector('[q-root]');
     if (!root || !window.EventSource) return;
@@ -3048,6 +3048,18 @@ _client_js := """(function () {
       });
     });
     stream.addEventListener('reload', function () { stream.close(); stream = null; location.reload(); });
+    stream.addEventListener('open', function () { retryMs = 250; });
+    // The line dropped — the server restarted (quirk run --watch) or the
+    // network blinked: try again soon (the browser waits ~3 s), sooner
+    // than later. A new server doesn't know this page and answers "reload".
+    stream.onerror = function () {
+      if (!stream || stream.readyState === 1) return;
+      stream.close();
+      stream = null;
+      streamId = null;
+      setTimeout(listen, retryMs);
+      retryMs = Math.min(retryMs * 2, 5000);
+    };
   }
   window.addEventListener('popstate', function () { navigate(location.pathname + location.search, false); });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { startTimers(); listen(); });

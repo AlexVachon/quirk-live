@@ -1,4 +1,5 @@
-// The live demo app: quirk run main.qk, then open http://localhost:3000
+// The live demo app: quirk run --watch main.qk, then open http://localhost:3000
+// (--watch: restarted on every save; the open tabs reload)
 // index.html is the base page; src/pages/ has the pages, src/components/ the components.
 use web
 use sys
