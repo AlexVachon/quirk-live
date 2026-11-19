@@ -16,9 +16,11 @@ nav {
     margin: 0;
 }
 
-.buttons,
-.plus {
+/* The row of buttons. (Not .plus: that's each +1 / +10 button itself —
+   as a flex box with a bottom margin, it sat higher than the others.) */
+.buttons {
     display: flex;
+    align-items: center;
     gap: .5rem;
     margin-bottom: .5rem;
 }
