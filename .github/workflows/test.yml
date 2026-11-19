@@ -43,9 +43,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Quirk (the latest release)
+        # Into QUIRK_HOME exactly: in a container job HOME is /github/home,
+        # so install.sh's default (~/.quirk) was somewhere else.
         run: |
-          curl -fsSL https://raw.githubusercontent.com/AlexVachon/quirk/main/install.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/AlexVachon/quirk/main/install.sh | INSTALL_DIR="$QUIRK_HOME" sh
           echo "$QUIRK_HOME/bin" >> "$GITHUB_PATH"
+          "$QUIRK_HOME/bin/quirk" --version
 
       - name: Quirk tests
         run: |
