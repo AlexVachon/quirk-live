@@ -1,0 +1,214 @@
+// Form validation: rules(), checked on leaving a field / as it's fixed /
+// by valid(); error(), <FieldError>, aria-invalid; set_error from the server.
+use web
+use live
+use test
+
+taken := ["ada@example.com"]
+
+struct SignupPage : live.Page {
+    name: String
+    email: String
+    password: String
+    confirm: String
+    age: Int
+    code: String
+    terms: Bool
+    saved: Int
+
+    define on_load(self) -> void {
+        self.name = ""
+        self.email = ""
+        self.password = ""
+        self.confirm = ""
+        self.age = 0
+        self.code = ""
+        self.terms = false
+        self.saved = 0
+    }
+
+    define rules(self) -> Map {
+        return {
+            "name":     [live.required("Your name, please"), live.max_length(10)],
+            "email":    [live.required(), live.email()],
+            "password": [live.required(), live.min_length(8)],
+            "confirm":  [live.check(fn(v) => v == self.password, "The passwords don't match")],
+            "age":      [live.between(13, 120)],
+            "code":     [live.pattern("[A-Z]{3}-[0-9]+")],
+            "terms":    [live.required("Accept the terms")],
+        }
+    }
+
+    define save(self) -> void {
+        if not self.valid() { return }
+        for t in taken {
+            if String(t) == self.email {
+                self.set_error("email", "That email is already taken")
+                return
+            }
+        }
+        self.saved = self.saved + 1
+    }
+
+    define template(self) -> String {
+        return r"""
+            <form @submit="save">
+              <input model="name" placeholder="Name"><FieldError field="name" />
+              <input model="email" placeholder="Email"><span class="e-email">{{ error('email') }}</span>
+              <input model="password" placeholder="Password">
+              <FieldError field="password" />
+              <input model="confirm" placeholder="Confirm"><FieldError field="confirm" />
+              <input model="age" placeholder="Age"><FieldError field="age" />
+              <input model="code" placeholder="Code"><FieldError field="code" />
+              <label><input type="checkbox" model="terms"> Terms</label><FieldError field="terms" />
+              <button>Sign up</button>
+            </form>
+            <p class="saved">saved {{ saved }}</p>
+        """
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/", SignupPage)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+// The error text of <FieldError field=…> / the span, in the page's HTML.
+define shown(html: String, field: String) -> String {
+    if field == "email" {
+        at := html.find("class=\"e-email\">")
+        rest := html.substring(at + 16, html.length())
+        return rest.substring(0, rest.find("<"))
+    }
+    marker := "placeholder=\"" + (field == "terms" ? "" : field.substring(0, 1).upper() + field.substring(1, field.length())) + "\""
+    at := field == "terms" ? html.find(" Terms</label>") : html.find(marker)
+    rest := html.substring(at, html.length())
+    p := rest.find("<p class=\"q-error\"")
+    rest = rest.substring(p, rest.length())
+    if rest.substring(0, rest.find(">")).contains("hidden") { return "" }
+    rest = rest.substring(rest.find(">") + 1, rest.length())
+    return rest.substring(0, rest.find("<")).trim()
+}
+
+define test_nothing_shown_until_a_field_is_left() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    test.assert_eq(shown(s.html, "name"), "")
+    s.type("Name", "")
+    test.assert_eq(shown(s.html, "name"), "")             // typing alone: no error yet
+    s.blur("Name")                                         // leaving it: checked
+    test.assert_eq(shown(s.html, "name"), "Your name, please", s.html)
+    test.assert_true(s.html.contains("placeholder=\"Name\" aria-invalid=\"true\"") or s.html.contains("aria-invalid=\"true\""))
+    s.type("Name", "Ada")                                  // fixed: cleared as they type
+    test.assert_eq(shown(s.html, "name"), "")
+    test.assert_false(s.html.contains("aria-invalid"))
+    s.type("Name", "Ada Lovelace!")                        // still checked while it's shown? no: only once in error
+    test.assert_eq(shown(s.html, "name"), "")
+    s.blur("Name")
+    test.assert_eq(shown(s.html, "name"), "At most 10 characters")
+    s.type("Name", "Ada L")
+    test.assert_eq(shown(s.html, "name"), "")
+}
+
+define test_submit_checks_everything() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    s.submit_form("Name", {})
+    test.assert_true(s.html.contains("saved 0"))
+    test.assert_eq(shown(s.html, "name"), "Your name, please")
+    test.assert_eq(shown(s.html, "email"), "This field is required")
+    test.assert_eq(shown(s.html, "password"), "This field is required")
+    test.assert_eq(shown(s.html, "terms"), "Accept the terms")
+    test.assert_eq(shown(s.html, "age"), "Between 13 and 120")   // 0 isn't in it
+    s.type("Name", "Ada")
+    s.type("Email", "ada.example.com")
+    s.blur("Email")
+    test.assert_eq(shown(s.html, "email"), "Enter an email address")
+    s.type("Email", "grace@example.com")
+    test.assert_eq(shown(s.html, "email"), "")
+    s.type("Password", "short")
+    s.blur("Password")
+    test.assert_eq(shown(s.html, "password"), "At least 8 characters")
+    s.type("Password", "long enough")
+    s.type("Confirm", "long enougj")
+    s.blur("Confirm")
+    test.assert_eq(shown(s.html, "confirm"), "The passwords don&#39;t match")   // (escaped in the page)
+    s.type("Confirm", "long enough")
+    test.assert_eq(shown(s.html, "confirm"), "")
+    s.type("Code", "abc-1")
+    s.blur("Code")
+    test.assert_eq(shown(s.html, "code"), "Not in the right form")
+    s.type("Code", "ABC-12")
+    test.assert_eq(shown(s.html, "code"), "")
+    s.check("Terms")
+    test.assert_eq(shown(s.html, "terms"), "")              // ticked: cleared
+    s.type("Age", "36")
+    test.assert_eq(shown(s.html, "age"), "")
+    s.submit_form("Name", {})
+    test.assert_true(s.html.contains("saved 1"), s.html)
+    test.assert_false(s.html.contains("aria-invalid"))
+}
+
+define test_numbers_and_server_errors() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    s.type("Age", "abc")                                   // not a number: an error, no crash
+    test.assert_eq(s.status, 200)
+    test.assert_eq(shown(s.html, "age"), "Enter a whole number")
+    s.blur("Age")
+    test.assert_eq(shown(s.html, "age"), "Enter a whole number")
+    s.type("Age", "200")
+    test.assert_eq(shown(s.html, "age"), "Between 13 and 120")
+    s.type("Age", "40")
+    test.assert_eq(shown(s.html, "age"), "")
+    s.type("Name", "Ada")
+    s.type("Email", "ada@example.com")
+    s.type("Password", "a good one")
+    s.type("Confirm", "a good one")
+    s.check("Terms")
+    s.submit_form("Name", {})                              // valid, but the server says no
+    test.assert_eq(shown(s.html, "email"), "That email is already taken")
+    test.assert_true(s.html.contains("saved 0"))
+    s.type("Email", "ada2@example.com")                    // typing re-checks it: the rules pass, cleared
+    test.assert_eq(shown(s.html, "email"), "")
+    s.submit_form("Name", {})
+    test.assert_true(s.html.contains("saved 1"))
+}
+
+struct Probe : live.Component {
+    v: String
+    define rules(self) -> Map {
+        return {"v": [live.required()]}
+    }
+}
+
+define test_rules_directly() -> void {
+    p := Probe()
+    p.v = "  "
+    test.assert_false(p.valid())
+    test.assert_eq(p.error("v"), "This field is required")
+    test.assert_true(p.has_errors())
+    p.v = "x"
+    test.assert_true(p.validate("v"))
+    test.assert_false(p.has_errors())
+    p.set_error("v", "nope")
+    test.assert_eq(String(p.errors()["v"]), "nope")
+    p.clear_errors()
+    test.assert_eq(p.error("v"), "")
+    em: Callable = live.email()
+    for ok in ["a@b.co", "first.last@sub.example.org", ""] { test.assert_eq(_s(em(ok)), "", String(ok)) }
+    for bad in ["a@b", "@b.co", "a b@c.de", "a@b@c.de", "a@.com", "a@b."] { test.assert_true(_s(em(bad)) != "", String(bad)) }
+    bt: Callable = live.between(1.5, 2)
+    test.assert_eq(_s(bt(1.5)), "")
+    test.assert_eq(_s(bt(2.01)), "Between 1.5 and 2")
+    ml: Callable = live.min_length(2)
+    test.assert_eq(_s(ml("")), "")                       // empty: required's business
+    test.assert_eq(_s(ml([1])), "At least 2 characters")
+}
+
+define _s(v: Any) -> String {
+    return String(v)
+}

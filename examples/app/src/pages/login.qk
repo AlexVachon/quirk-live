@@ -1,20 +1,28 @@
 use live
 
 // A demo login: any name, password "quirk". A real app checks a database.
+// Validation: rules() is checked as you leave each field and on submit;
+// set_error() shows what only the server knows (a wrong password).
 struct LoginPage : live.Page {
     name: String
     password: String
-    error: String
 
     define on_load(self) -> void {
         self.name = ""
         self.password = ""
-        self.error = ""
+    }
+
+    define rules(self) -> Map {
+        return {
+            "name":     [live.required("Your name, please"), live.max_length(30)],
+            "password": [live.required("The password, please (it's quirk)")],
+        }
     }
 
     define submit(self) -> void {
-        if self.name.trim() == "" or self.password != "quirk" {
-            self.error = "Try any name, with the password quirk."
+        if not self.valid() { return }
+        if self.password != "quirk" {
+            self.set_error("password", "Wrong password — try quirk")
             return
         }
         self.login(self.name.trim())
@@ -32,10 +40,11 @@ struct LoginPage : live.Page {
             <h1>Log in</h1>
             <form class="login" @submit="submit">
               <input model="name" placeholder="Name" autocomplete="username">
+              <FieldError field="name" />
               <input type="password" model="password" placeholder="Password" autocomplete="current-password">
+              <FieldError field="password" />
               <button>Log in</button>
             </form>
-            {% if error %}<p class="error" role="alert">{{ error }}</p>{% end %}
         """
     }
 }

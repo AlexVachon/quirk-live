@@ -211,10 +211,17 @@ check(link('/hello/world').classList.contains('active'), 'path.startswith(\'/hel
 go('/account');
 check(await until(() => !!input('Password')), 'Account (guarded): the login page instead');
 check(w.location.pathname === '/login' && w.location.search.includes('next='), 'URL: ' + w.location.pathname + w.location.search);
+// Validation (rules()): leaving an empty field shows its error; typing clears it.
+const shownError = () => [...d().querySelectorAll('.q-error')].filter(p => !p.hidden).map(p => p.textContent.trim()).join(' | ');
+input('Name').focus();
+input('Name').dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
+check(await until(() => shownError() === 'Your name, please'), 'leaving the empty name: its error (' + shownError() + ')');
+check(input('Name').getAttribute('aria-invalid') === 'true', 'the input says it\'s invalid (aria-invalid)');
 type(input('Name'), 'ada');
+check(await until(() => shownError() === '' && !input('Name').hasAttribute('aria-invalid')), 'typing a name clears it');
 type(input('Password'), 'wrong');
 d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
-check(await until(() => !!d().querySelector('.error')), 'a wrong password: an error');
+check(await until(() => shownError().includes('Wrong password')), 'a wrong password: its error, from the server (' + shownError() + ')');
 type(input('Password'), 'quirk');
 d().querySelector('form.login').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
 check(await until(() => !!d().querySelector('.account')), 'logged in: back to Account');

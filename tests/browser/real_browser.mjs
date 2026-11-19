@@ -107,6 +107,14 @@ check(new URL(page.url()).pathname === '/hello/world', 'Forward: hello again');
 // ---- Login: the cookie is HttpOnly ----
 await page.click('a[href="/account"]');
 await page.waitForSelector('input[placeholder="Password"]');
+// Validation: Tab out of the empty name — its error; typing clears it.
+await page.click('input[placeholder="Name"]');
+await page.keyboard.press('Tab');
+await page.waitForFunction(() => [...document.querySelectorAll('.q-error')].some(p => !p.hidden && p.textContent.includes('Your name')), null, { timeout: 4000 }).catch(() => {});
+check(await page.locator('.q-error:not([hidden])').count() === 1 && (await page.locator('.q-error:not([hidden])').textContent()).includes('Your name'), 'Tab out of an empty name: its error');
+check(await page.locator('input[placeholder="Name"]').getAttribute('aria-invalid') === 'true', 'and the input is aria-invalid');
+const focusedPh = await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('placeholder'));
+check(focusedPh === 'Password', 'the focus moved on to Password (' + focusedPh + ')');
 await page.fill('input[placeholder="Name"]', 'ada');
 await page.fill('input[placeholder="Password"]', 'quirk');
 await page.locator('input[placeholder="Password"]').dispatchEvent('input');

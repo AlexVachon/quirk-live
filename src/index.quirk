@@ -45,6 +45,7 @@ use sys
 use url
 use crypto
 use encoding.json
+use regex
 
 // ===== reflection (runtime: src/Runtime/libs/live.c) =====
 // A struct's fields and public methods by name — what templates use. Fields
@@ -132,6 +133,7 @@ struct Component {
     _streams: Int         // the root: browser streams connected now
     _streamed: Bool       // the root: a browser stream has connected (a real tab)
     _stream_left: Int     // the root: when the last stream ended (ms)
+    _errors: Map          // field → its error message (rules(), set_error)
 
     define __init(self) -> void {
         self.id = ""
@@ -282,6 +284,110 @@ struct Component {
     - `on_click()`: when it's clicked; `on_close()`: when it closes (×,
       timeout or close_notification)
     ---
+    // ----- form validation -----
+
+    ---
+    What its `model` fields must be: field name → a List of rules, each a
+    function giving "" when the value is fine, else what's wrong.
+
+        define rules(self) -> Map {
+            return {
+                "email":    [live.required(), live.email()],
+                "password": [live.required(), live.min_length(8)],
+                "age":      [live.between(13, 120)],
+                "confirm":  [live.check(fn(v) => v == self.password, "The passwords don't match")],
+            }
+        }
+
+    A field is checked when the visitor leaves it, and again as they type
+    once it shows an error (so it clears as soon as it's fixed); all of
+    them by `valid()`. Show an error with `{{ error('email') }}` or
+    `<FieldError field="email" />`; an input in error has aria-invalid.
+    ---
+    define rules(self) -> Map {
+        return {}
+    }
+
+    --- Its error for `field` ("" when there's none). ---
+    define error(self, field: String) -> String {
+        if self._errors == null or not self._errors.has(field) { return "" }
+        return String(self._errors[field])
+    }
+
+    --- Field → error, for the fields that have one. ---
+    define errors(self) -> Map {
+        out := {}
+        if self._errors != null {
+            for k in self._errors.keys() {
+                key: String = k
+                out[key] = self._errors[key]
+            }
+        }
+        return out
+    }
+
+    define has_errors(self) -> Bool {
+        return self._errors != null and self._errors.keys().length() > 0
+    }
+
+    ---
+    Show `message` as `field`'s error — what only the server can tell
+    ("That email is already taken"). "" clears it.
+    ---
+    define set_error(self, field: String, message: String) -> void {
+        if self._errors == null { self._errors = {} }
+        if message == "" {
+            if self._errors.has(field) { self._errors.remove(field) }
+        } else {
+            self._errors[field] = message
+        }
+    }
+
+    define clear_errors(self) -> void {
+        self._errors = {}
+    }
+
+    --- Check `field` against its rules (its error is set or cleared); true when it's fine. ---
+    define validate(self, field: String) -> Bool {
+        all := self.rules()
+        if all == null or not all.has(field) {
+            return self.error(field) == ""
+        }
+        v := has_field(self, field) ? get_field(self, field) : null
+        list: List = all[field]
+        for r in list {
+            rule: Callable = r
+            problem := _text(rule(v))
+            if problem != "" {
+                self.set_error(field, problem)
+                return false
+            }
+        }
+        self.set_error(field, "")
+        return true
+    }
+
+    ---
+    Check every field of `rules()`: true when all are fine — else their
+    errors are shown. In a submit handler:
+
+        define save(self) -> void {
+            if not self.valid() { return }
+            ...
+        }
+    ---
+    define valid(self) -> Bool {
+        self._errors = {}
+        all := self.rules()
+        ok := true
+        if all != null {
+            for k in all.keys() {
+                if not self.validate(String(k)) { ok = false }
+            }
+        }
+        return ok
+    }
+
     define notify(self, message: String, title: String = "", type: String = "", position: String = "",
                   duration: Int = -1, show_close: Bool = true, icon: String = "",
                   on_click: Callable = null, on_close: Callable = null) -> Int {
@@ -601,8 +707,124 @@ _notes_css := """<style>
 </style>"""
 
 
-// ===== layouts =====
+// ===== validation rules (Component.rules) =====
+// Each gives "" when the value is fine, else the message. All but
+// required() let an empty value through: a field that's optional but
+// must look right when it's filled in just leaves required() out.
 
+--- Not empty: some text (not only spaces), a ticked box, a non-empty List. ---
+define required(message: String = "This field is required") -> Callable {
+    return fn(v) {
+        if v is String {
+            s: String = v
+            return s.trim() == "" ? message : ""
+        }
+        if v is Bool {
+            b: Bool = v
+            return b ? "" : message
+        }
+        if v is List {
+            l: List = v
+            return l.length() == 0 ? message : ""
+        }
+        if v == null { return message }
+        return ""
+    }
+}
+
+--- At least `n` characters (or items). ---
+define min_length(n: Int, message: String = "") -> Callable {
+    say := message != "" ? message : "At least " + String(n) + " characters"
+    return fn(v) {
+        len := _length_of(v)
+        return len > 0 and len < n ? say : ""
+    }
+}
+
+--- At most `n` characters (or items). ---
+define max_length(n: Int, message: String = "") -> Callable {
+    say := message != "" ? message : "At most " + String(n) + " characters"
+    return fn(v) {
+        return _length_of(v) > n ? say : ""
+    }
+}
+
+--- A number from `low` to `high` (both included). ---
+define between(low: Any, high: Any, message: String = "") -> Callable {
+    say := message != "" ? message : "Between " + _text(low) + " and " + _text(high)
+    lo := Double(low)
+    hi := Double(high)
+    return fn(v) {
+        if v == null or (v is String and _text(v).trim() == "") { return "" }
+        d := Double(v)
+        return d < lo or d > hi ? say : ""
+    }
+}
+
+--- Looks like an email address (name@domain.tld, no spaces). ---
+define email(message: String = "Enter an email address") -> Callable {
+    return fn(v) {
+        s := _text(v).trim()
+        if s == "" { return "" }
+        at := s.find("@")
+        if at <= 0 or s.contains(" ") or s.substring(at + 1, s.length()).contains("@") { return message }
+        domain := s.substring(at + 1, s.length())
+        dot := domain.find(".")
+        if dot <= 0 or domain.endswith(".") { return message }
+        return ""
+    }
+}
+
+--- All of it matches the regular expression `regex` (POSIX extended). ---
+define pattern(regex_text: String, message: String = "Not in the right form") -> Callable {
+    whole := "^(" + regex_text + ")$"
+    return fn(v) {
+        s := _text(v)
+        if s == "" { return "" }
+        return regex.test(whole, s) ? "" : message
+    }
+}
+
+---
+Your own rule: `test(value)` true when it's fine.
+
+    live.check(fn(v) => v == self.password, "The passwords don't match")
+---
+define check(test: Callable, message: String) -> Callable {
+    return fn(v) {
+        return _truthy(test(v)) ? "" : message
+    }
+}
+
+define _length_of(v: Any) -> Int {
+    if v == null { return 0 }
+    if v is List {
+        l: List = v
+        return l.length()
+    }
+    return _text(v).length()
+}
+
+---
+`<FieldError field="email" />`: the error of the component's field `email`,
+in a `<p class="q-error" role="alert">` (hidden when there's none; a screen
+reader says it when it appears).
+---
+struct FieldError : Component {
+    field: String
+
+    define message(self) -> String {
+        if self._parent == null { return "" }
+        return self._parent.error(self.field)
+    }
+
+    define template(self) -> String {
+        return r"""<p class="q-error" role="alert" :hidden="message == ''">{{ message }}</p>"""
+    }
+}
+
+
+// ===== layouts =====
 ---
 What some pages are shown in — a sidebar, a header, an admin area — that
 stays while you go from one of them to another: only its `<slot />`, the
@@ -1533,6 +1755,14 @@ define _render_tag(node: _TNode, ctx: _Ctx) -> String {
             if not events.has(q) { events[q] = [] }
             ids: List = events[q]
             ids.append(_register(ctx, [ctx.comp, "=" + value]))
+            // Leaving the field checks it, when it has rules(); in error, it says so.
+            field_rules := ctx.comp.rules()
+            if field_rules != null and field_rules.has(value) {
+                if not events.has("q-blur") { events["q-blur"] = [] }
+                blur_ids: List = events["q-blur"]
+                blur_ids.append(_register(ctx, [ctx.comp, "?" + value]))
+            }
+            if ctx.comp.error(value) != "" { attrs = attrs + " aria-invalid=\"true\"" }
             if is_checkbox {
                 if _truthy(current) { attrs = attrs + " checked" }
             } elif node.text == "select" {
@@ -1972,7 +2202,23 @@ define _run_handler(h: List, value: Any, pass_value: Bool) -> void {
     target := h[0]
     method: String = h[1]
     if method.startswith("=") {
-        _set_prop(target, method.substring(1, method.length()), value)
+        field := method.substring(1, method.length())
+        comp: Component = target
+        try {
+            _set_prop(target, field, value)
+        } catch (ValueError) {
+            // Text in a number field that isn't a number: an error, not a crash.
+            kind := field_type(target, field)
+            comp.set_error(field, kind == "Int" ? "Enter a whole number" : "Enter a number")
+            return
+        }
+        if comp.error(field) != "" { comp.validate(field) }     // fixed yet? (as they type)
+        return
+    }
+    if method.startswith("?") {
+        comp: Component = target
+        field := method.substring(1, method.length())
+        if data_ok(comp, field) { comp.validate(field) }
         return
     }
     args: List = h[2]
@@ -1982,6 +2228,13 @@ define _run_handler(h: List, value: Any, pass_value: Bool) -> void {
     } else {
         call_method(target, method, args)
     }
+}
+
+// On leaving a field: check it — unless its text isn't even a number
+// (that error, set as they typed, stays).
+define data_ok(comp: Component, field: String) -> Bool {
+    e := comp.error(field)
+    return e != "Enter a whole number" and e != "Enter a number"
 }
 
 // An event from the page: `h3` (or several, space-separated) → its handler.
@@ -2951,6 +3204,13 @@ _client_js := """(function () {
     var el = e.target.closest ? e.target.closest('[q-change]') : null;
     if (el) { flush(); send(el, el.getAttribute('q-change'), dataOf(el)); }
   });
+  // Leaving a model field: the server checks it (rules()). The typing goes first.
+  document.addEventListener('focusout', function (e) {
+    var el = e.target && e.target.getAttribute ? e.target : null;
+    if (!el || !el.hasAttribute('q-blur')) return;
+    flush();
+    send(el, el.getAttribute('q-blur'), {});
+  });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
     var el = e.target.closest ? e.target.closest('[q-enter]') : null;
@@ -3639,6 +3899,11 @@ struct TestSession {
     }
 
     --- Type `value` into the text field whose placeholder is `placeholder`. ---
+    --- Leave the field with `placeholder` (as tabbing out of it): its rules are checked. ---
+    define blur(self, placeholder: String) -> TestSession {
+        return self.send(self._event_at("placeholder=\"" + web.escape(placeholder) + "\"", "q-blur"), {})
+    }
+
     define type(self, placeholder: String, value: String) -> TestSession {
         w := self._widget_for(placeholder)
         if w != null { return self.send(w._on("change"), {"value": value}) }

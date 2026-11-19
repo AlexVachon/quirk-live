@@ -199,6 +199,74 @@ content, `<Card title="…">…</Card>`.
   `{% for %}` are matched by position; give them `:key="item.id"` when the
   list's order changes.
 
+## Forms and validation
+
+A component's `rules()` says what its `model` fields must be: field name →
+a List of rules.
+
+```quirk
+struct SignupPage : live.Page {
+    email: String
+    password: String
+    confirm: String
+    age: Int
+    terms: Bool
+
+    define rules(self) -> Map {
+        return {
+            "email":    [live.required(), live.email()],
+            "password": [live.required(), live.min_length(8)],
+            "confirm":  [live.check(fn(v) => v == self.password, "The passwords don't match")],
+            "age":      [live.between(13, 120)],
+            "terms":    [live.required("Accept the terms to go on")],
+        }
+    }
+
+    define save(self) -> void {
+        if not self.valid() { return }                  // the errors are shown
+        if db().value("SELECT 1 FROM users WHERE email = ?", [self.email]) != null {
+            self.set_error("email", "That email is already taken")
+            return
+        }
+        ...
+    }
+
+    define template(self) -> String {
+        return r"""
+            <form @submit="save">
+              <input model="email" placeholder="Email"> <FieldError field="email" />
+              <input type="password" model="password" placeholder="Password"> <FieldError field="password" />
+              ...
+              <button>Sign up</button>
+            </form>
+        """
+    }
+}
+```
+
+- **When:** a field is checked when the visitor leaves it, and every field by
+  `valid()` (on submit). Nothing shows while they're still typing — but once a
+  field shows an error, it's checked again as they type, so it clears as soon as
+  it's right.
+- **Rules:** `required(message)`, `min_length(n)`, `max_length(n)`,
+  `between(low, high)`, `email()`, `pattern("[A-Z]{3}-[0-9]+")` (the whole
+  value), and `check(fn(v) => …, message)` for your own. Each takes the message
+  to show; all but `required` let an empty value through (an optional field that
+  must look right when filled in). A rule is just a function giving `""` or the
+  message: `fn(v) => …`.
+- **From the server:** `self.set_error(field, message)` — what only it can tell
+  (taken, wrong password). `error(field)`, `errors()`, `has_errors()`,
+  `validate(field)`, `clear_errors()`.
+- **Showing it:** `<FieldError field="email" />` is a `<p class="q-error"
+  role="alert">` (hidden when there's none; screen readers say it when it
+  appears), or `{{ error('email') }}` anywhere. An input in error has
+  `aria-invalid="true"`: style it with `input[aria-invalid="true"] { … }`.
+- **Numbers:** text in an `Int` / `Double` field that isn't a number is an error
+  ("Enter a whole number"), the field keeping its last value.
+- **Testing:** `s.blur("Email")` leaves a field; then look at `s.html`.
+
+The demo's login page (`examples/app/src/pages/login.qk`) uses it.
+
 ## Notifications
 
 Like Element Plus's `ElNotification`: call `notify` from any page or
@@ -435,6 +503,7 @@ define test_counter() -> void {
     s.navigate("/todos")
     s.submit("New item", "milk")         // type into the field with that placeholder, press Enter
     s.type("Search", "mi")               // @input / model=
+    s.blur("Search")                     // leave the field: its rules() are checked
     s.check("Done only")                 // a checkbox, by its label
     s.choose("high")                     // a <select>'s option
     s.submit_form("text", {"text": "eggs"})
