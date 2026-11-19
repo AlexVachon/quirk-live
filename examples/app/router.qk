@@ -6,7 +6,9 @@ from src.pages.hello use { HelloPage }
 from src.pages.login use { LoginPage }
 from src.pages.account use { AccountPage }
 from src.pages.live use { LivePage }
+from src.pages.settings use { SettingsPage }
 from src.layouts.main use { MainLayout }
+from src.layouts.account use { AccountLayout }
 use live
 
 router = Router()
@@ -20,6 +22,9 @@ main.add("/hello/:name", HelloPage)
 main.add("/live", LivePage)
 main.add("/login", LoginPage)
 
-// Logged-in visitors only: others go to /login (and come back after).
-members := router.group(layout=MainLayout, guard=live.require_login())
-members.add("/account", AccountPage)
+// A group inside `main`: these pages are in AccountLayout, itself in
+// MainLayout's slot — and for logged-in visitors only (others go to /login,
+// and come back after).
+account := main.group(layout=AccountLayout, guard=live.require_login())
+account.add("/account", AccountPage)
+account.add("/account/settings", SettingsPage)

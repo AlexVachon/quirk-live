@@ -1,0 +1,27 @@
+use live
+
+// The second account page (in AccountLayout, in MainLayout).
+struct SettingsPage : live.Page {
+    emails: Bool
+
+    define on_load(self) -> void {
+        self.emails = self.session().get("emails", false)        // a Bool field: read as one
+    }
+
+    define toggle(self) -> void {
+        self.emails = not self.emails
+        self.session().set("emails", self.emails)
+        self.notify(self.emails ? "Emails on." : "Emails off.", type="success", duration=2000)
+    }
+
+    define title(self) -> String {
+        return "Settings"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Settings</h1>
+            <label><input type="checkbox" :checked="emails" @change="toggle"> Email me about new todos</label>
+        """
+    }
+}

@@ -1,0 +1,39 @@
+use live
+
+---
+The account pages' own layout, *inside* MainLayout (router.qk: a group in a
+group). Going between /account and /account/settings keeps both layouts —
+and this one's `opened` count; going elsewhere drops this one only.
+---
+struct AccountLayout : live.Layout {
+    opened: Int
+
+    define on_load(self) -> void {
+        self.opened = 0
+    }
+
+    define on_navigate(self, path: String) -> void {
+        self.opened = self.opened + 1
+    }
+
+    define template(self) -> String {
+        return r"""
+            <div class="account-area">
+              <aside>
+                <a href="/account" q-link :class="path == '/account' ? 'on' : ''">Profile</a>
+                <a href="/account/settings" q-link :class="path == '/account/settings' ? 'on' : ''">Settings</a>
+                <small>{{ opened }} account page{{ opened == 1 ? '' : 's' }}</small>
+              </aside>
+              <div class="account-page"><slot /></div>
+            </div>
+            <style scoped>
+              .account-area { display: flex; gap: 1.5rem; }
+              aside { display: flex; flex-direction: column; gap: .4rem; min-width: 8rem; }
+              aside a { text-decoration: none; }
+              aside a.on { font-weight: 700; }
+              small { color: #6b7280; }
+              .account-page { flex: 1; }
+            </style>
+        """
+    }
+}

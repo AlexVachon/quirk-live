@@ -1,0 +1,177 @@
+// Layouts inside layouts: a group inside a group. Going between pages keeps
+// every layout they share (from the outermost in); the rest is made anew.
+use web
+use live
+use test
+
+struct Shell : live.Layout {
+    loads: Int
+    visits: Int
+    dark: Bool
+
+    define on_load(self) -> void {
+        self.loads = self.loads + 1
+        self.visits = 0
+        self.dark = false
+    }
+
+    define on_navigate(self, path: String) -> void {
+        self.visits = self.visits + 1
+    }
+
+    define theme(self) -> void {
+        self.dark = not self.dark
+    }
+
+    define template(self) -> String {
+        return r"""<header>shell loads={{ loads }} visits={{ visits }} dark={{ dark }} at={{ path }}<button @click="theme">Theme</button></header><main><slot /></main>"""
+    }
+}
+
+struct AdminArea : live.Layout {
+    loads: Int
+    visits: Int
+    open: Int
+
+    define on_load(self) -> void {
+        self.loads = self.loads + 1
+        self.visits = 0
+        self.open = 0
+    }
+
+    define on_navigate(self, path: String) -> void {
+        self.visits = self.visits + 1
+    }
+
+    define expand(self) -> void {
+        self.open = self.open + 1
+    }
+
+    define template(self) -> String {
+        return r"""<nav>admin loads={{ loads }} visits={{ visits }} open={{ open }} at={{ path }}<button @click="expand">Expand</button></nav><div class="admin"><slot /></div>"""
+    }
+}
+
+struct Home : live.Page {
+    define template(self) -> String {
+        return r"""<p>home</p>"""
+    }
+}
+
+struct Users : live.Page {
+    n: Int
+
+    define on_load(self) -> void {
+        self.n = 0
+    }
+
+    define add(self) -> void {
+        self.n = self.n + 1
+    }
+
+    define title(self) -> String {
+        return "Users " + String(self.n)
+    }
+
+    define template(self) -> String {
+        return r"""<p>users {{ n }}</p><button @click="add">add user</button>"""
+    }
+}
+
+struct Settings : live.Page {
+    define template(self) -> String {
+        return r"""<p>settings</p>"""
+    }
+}
+
+struct Login : live.Page {
+    define template(self) -> String {
+        return r"""<p>login</p>"""
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    main := router.group(layout=Shell)
+    main.add("/", Home)
+    main.add("/login", Login)
+    admin := main.group(layout=AdminArea, guard=fn(req) {
+        r: web.Request = req
+        return r.query.has("no") ? "/login" : ""
+    })
+    admin.add("/admin/users", Users)
+    admin.add("/admin/settings", Settings)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_inner_layout_inside_the_outer_one() -> void {
+    s := live.TestSession(make_app())
+    s.open("/admin/users")
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("<main><nav>admin loads=1 visits=1 open=0 at=/admin/users"), s.html)
+    test.assert_true(s.html.contains("<div class=\"admin\"><p>users 0</p>"))
+    test.assert_true(s.html.contains("shell loads=1 visits=1"))
+    test.assert_true(s.html.contains("<title>Users 0</title>"))              // the page's title, through both
+    s.click("add user")                                                      // the page's handler
+    s.click("Expand")                                                        // the inner layout's
+    s.click("Theme")                                                         // the outer one's
+    test.assert_true(s.html.contains("users 1"), s.html)
+    test.assert_true(s.html.contains("open=1"))
+    test.assert_true(s.html.contains("dark=true"))
+}
+
+define test_both_layouts_kept_between_inner_pages() -> void {
+    s := live.TestSession(make_app())
+    s.open("/admin/users")
+    id := s.id
+    s.click("Expand")
+    s.click("Theme")
+    s.navigate("/admin/settings")
+    test.assert_eq(s.id, id)
+    test.assert_true(s.html.contains("admin loads=1 visits=2 open=1 at=/admin/settings"), s.html)
+    test.assert_true(s.html.contains("shell loads=1 visits=2 dark=true at=/admin/settings"))
+    test.assert_true(s.html.contains("<div class=\"admin\"><p>settings</p></div>"))
+    s.click("Expand")                                                        // still answers after the swap
+    test.assert_true(s.html.contains("open=2"))
+}
+
+define test_leaving_the_inner_group_keeps_the_outer_layout() -> void {
+    s := live.TestSession(make_app())
+    s.open("/admin/users")
+    id := s.id
+    s.click("Theme")
+    s.click("Expand")
+    s.navigate("/")
+    test.assert_eq(s.id, id)
+    test.assert_true(s.html.contains("<main><p>home</p></main>"), s.html)  // the page in the outer slot
+    test.assert_false(s.html.contains("<nav>"))
+    test.assert_true(s.html.contains("shell loads=1 visits=2 dark=true at=/"))
+    s.navigate("/admin/settings")                                            // back in: a new inner layout
+    test.assert_true(s.html.contains("admin loads=1 visits=1 open=0"), s.html)
+    test.assert_true(s.html.contains("dark=true"))
+    s.click("Expand")
+    test.assert_true(s.html.contains("open=1"))
+}
+
+define test_inner_guard_and_old_handlers() -> void {
+    s := live.TestSession(make_app())
+    s.open("/admin/users?no=1")                                              // the inner group's guard
+    test.assert_eq(s.status, 302)
+    s.open("/")
+    s.navigate("/admin/settings?no=1")                                       // and on a q-link to it
+    test.assert_true(s.html.contains("<main><p>login</p></main>"), s.html)
+    test.assert_eq(s.location, "/login")
+    s.open("/admin/users")
+    old := s.html
+    s.navigate("/admin/settings")
+    // A click on the users page that's gone does nothing, even with ids nested.
+    q := old.find("q-click=\"h1.1.")                                       // shell > admin #1 > page #1
+    test.assert_true(q >= 0, old)
+    rest := old.substring(q + 9, old.length())
+    s.send(rest.substring(0, rest.find("\"")), {})
+    test.assert_eq(s.status, 200)
+    test.assert_true(s.html.contains("settings"))
+    test.assert_false(s.html.contains("users"))
+}

@@ -295,6 +295,29 @@ router.add("/about", AboutPage, layout=MainLayout)   // or one page at a time
 
 `index.html` stays the outer page of the whole app.
 
+### Layouts inside layouts
+
+A group inside a group: its pages are in its layout, which is itself in the
+outer group's `<slot />` — like an admin area inside the site's frame.
+
+```quirk
+main := router.group(layout=MainLayout)
+main.add("/", HomePage)
+
+admin := main.group(layout=AdminLayout, guard=only_admins)   // inside MainLayout
+admin.add("/admin", AdminHome)
+admin.add("/admin/users", UsersPage)
+```
+
+- Between two admin pages, **both** layouts stay; only the page changes.
+- From an admin page to `/`, `MainLayout` stays and `AdminLayout` goes; the
+  page takes its place in `MainLayout`'s slot. Coming back makes a new
+  `AdminLayout` (its `on_load` again).
+- Every layout that stays gets its `path` updated and `on_navigate(path)`.
+- Guards add up: an inner group's pages are behind the outer group's guard
+  *and* its own (the first one that turns the visitor away decides).
+- Groups nest as deep as you like: `admin.group(layout=ReportsLayout)`.
+
 ## Login
 
 With `app.use(web.sessions())` in the app (see
@@ -302,9 +325,10 @@ With `app.use(web.sessions())` in the app (see
 
 ```quirk
 // router.qk
-members := router.group(layout=MainLayout, guard=live.require_login())
-members.add("/account", AccountPage)
-router.add("/login", LoginPage)
+account := main.group(layout=AccountLayout, guard=live.require_login())
+account.add("/account", AccountPage)
+account.add("/account/settings", SettingsPage)
+main.add("/login", LoginPage)
 ```
 
 ```quirk

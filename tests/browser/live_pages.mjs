@@ -206,6 +206,20 @@ check(d().querySelector('.account').textContent.includes('ada') && d().querySele
 check(!!jar.quirk_session, 'the session cookie is set');
 check(d().querySelector('.layout nav') === nav && scratch().value === 'remember me', 'the layout stayed through the login');
 check(await until(() => !!note('Welcome, ada!')), 'a welcome notification');
+
+// Nested layouts: the account pages are in AccountLayout, inside MainLayout.
+const area = d().querySelector('.account-area');
+check(!!area && !!area.closest('.layout section.page'), 'AccountLayout inside MainLayout\'s slot');
+go('/account/settings');
+check(await until(() => !!d().querySelector('input[type=checkbox]')), 'Settings: in the same account area');
+check(d().querySelector('.account-area') === area && d().querySelector('.layout nav') === nav, 'both layouts stayed (the same elements)');
+check(/2 account pages/.test(area.querySelector('small').textContent), 'AccountLayout\'s on_navigate: ' + area.querySelector('small').textContent);
+check(link('/account').classList.contains('active') && link('/account/settings').classList.contains('on'), 'both layouts mark their link');
+go('/todos');
+check(await until(() => !!d().querySelector('input[placeholder="Search"]') && !d().querySelector('.account-area')), 'out of the account pages: AccountLayout gone');
+check(d().querySelector('.layout nav') === nav && scratch().value === 'remember me', 'MainLayout stayed');
+go('/account');
+check(await until(() => !!d().querySelector('.account')) && /1 account page$/.test(d().querySelector('.account-area small').textContent.trim()), 'back in: a new AccountLayout');
 d().querySelector('.who button').click();
 check(await until(() => w.location.pathname === '/' && d().querySelector('.who').textContent.includes('Log in')), 'logged out: home, "Log in" again');
 check(!jar.quirk_session, 'the cookie is cleared');

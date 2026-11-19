@@ -209,7 +209,11 @@ struct Component {
     // and its tab's stream is connected — or was, less than 30 s ago (a
     // reconnect) — or there never was one (no EventSource; a TestSession).
     define _alive(self) -> Bool {
-        if self._gone { return false }
+        up := self
+        while up != null {
+            if up._gone { return false }       // it, or a layout around it, was replaced
+            up = up._outer
+        }
         root := self._root_of()
         if root.id == "" or not _sessions.has(root.id) { return false }
         if root._streamed and root._streams == 0 and web.ms() - root._stream_left > 30000 { return false }
@@ -365,6 +369,15 @@ struct Component {
 
     // A Layout shows `page` (made for `req`); other components: nothing.
     define _enter(self, page: Component, req: web.Request) -> void {
+    }
+
+    // A Layout: what's in its slot (a page, or a layout inside it); else null.
+    define _inner(self) -> Component {
+        return null
+    }
+
+    // A Layout that stays while the page inside it changes: its path, on_navigate.
+    define _touch(self, req: web.Request) -> void {
     }
 
     --- A `:param` of the page's path ("/users/:id" → `self.param("id")`); "" if none. ---
@@ -651,7 +664,9 @@ struct Layout : Component {
         page.request = req
         page._outer = self
         page.id = self.id + "-p" + String(self._serial)
-        page._hid = "p" + String(self._serial) + "h"
+        // its handler ids under this layout's ("h3", inside: "h1.3", "h1.2.3")
+        prefix := self._hid == null or self._hid == "" ? "h" : self._hid
+        page._hid = prefix + String(self._serial) + "."
         self.page = page
         self.path = req.path
         self.request = req              // the current page's: its path, params, session
@@ -662,6 +677,16 @@ struct Layout : Component {
     define _slot_html(self) -> String {
         if self.page == null { return "" }
         return self.page.render()
+    }
+
+    define _inner(self) -> Component {
+        return self.page
+    }
+
+    define _touch(self, req: web.Request) -> void {
+        self.path = req.path
+        self.request = req
+        self.on_navigate(req.path)
     }
 
     // The layout's own handlers ("h3"), else the page's.
@@ -3089,15 +3114,32 @@ define page(app: web.App, path: String, factory: Callable) -> void {
 }
 
 // A new layout (stored as the session) showing a new page.
-define _make_in_layout(layout: Callable, factory: Callable, req: web.Request) -> Component {
-    lay: Component = layout()
-    lay.request = req
-    _store(lay)
-    lay._start()
+// New layouts, outermost first (the outermost stored as the session), each
+// in the slot of the one around it, then a new page in the innermost.
+define _make_in_layouts(layouts: List, factory: Callable, req: web.Request) -> Component {
+    first: Callable = layouts[0]
+    root: Component = first()
+    root.request = req
+    _store(root)
+    root._start()
+    _fill_layouts(root, layouts, 1, factory, req)
+    return root
+}
+
+// Inside `outer`: the layouts from index `start` on, then the page.
+define _fill_layouts(outer: Component, layouts: List, start: Int, factory: Callable, req: web.Request) -> void {
+    cur := outer
+    i := start
+    while i < layouts.length() {
+        maker: Callable = layouts[i]
+        lay: Component = maker()
+        cur._enter(lay, req)
+        cur = lay
+        i = i + 1
+    }
     page: Component = factory(req)
     if page == null { throw web.HttpError(500, "live: the page factory returned null") }
-    lay._enter(page, req)
-    return lay
+    cur._enter(page, req)
 }
 
 define _make(factory: Callable, req: web.Request) -> Component {
@@ -3312,7 +3354,7 @@ define _install_on(app: web.Router) -> void {
             if params != null {
                 nav.params = params
                 factory: Callable = entry[1]
-                kind: String = entry.length() > 3 ? String(entry[3]) : ""
+                kinds: List = entry.length() > 3 and entry[3] != null ? entry[3] : []
                 if entry.length() > 4 and entry[4] != null {
                     g: Callable = entry[4]
                     dest := _text(g(nav))
@@ -3321,17 +3363,33 @@ define _install_on(app: web.Router) -> void {
                         return
                     }
                 }
-                if kind != "" {
-                    // Same layout as the page we're on: it stays, only its page changes.
+                if kinds.length() > 0 {
+                    layouts: List = entry[2]
+                    // The layouts this page shares with the one we're on (from
+                    // the outermost in) stay; the rest is made anew inside them.
                     here := r.query.has("from") ? _find(String(r.query["from"])) : null
-                    if here != null and type_name(here) == kind {
-                        page: Component = factory(nav)
-                        here._enter(page, nav)
+                    if here != null and type_name(here) == String(kinds[0]) {
+                        kept := [here]
+                        cur: Component = here
+                        depth := 1
+                        while depth < kinds.length() {
+                            nxt := cur._inner()
+                            if nxt == null or type_name(nxt) != String(kinds[depth]) or not has_field(nxt, "_serial") { break }
+                            cur = nxt
+                            kept.append(cur)
+                            depth = depth + 1
+                        }
+                        k := 0
+                        while k < kept.length() - 1 {                // around the one that changes: path, on_navigate
+                            up: Component = kept[k]
+                            up._touch(nav)
+                            k = k + 1
+                        }
+                        _fill_layouts(cur, layouts, depth, factory, nav)
                         rs.json({"id": here.id, "html": _body(here), "title": here.title(), "kept": true})
                         return
                     }
-                    maker: Callable = entry[2]
-                    comp := _make_in_layout(maker, factory, nav)
+                    comp := _make_in_layouts(layouts, factory, nav)
                     _leave(r)
                     rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
                     return
@@ -3373,19 +3431,27 @@ struct Router : web.Router {
     several pages).
     ---
     define add(self, path: String, page: Callable, layout: Callable = null, guard: Callable = null) -> Router {
+        return self._add_chain(path, page, layout != null ? [layout] : [], guard != null ? [guard] : [])
+    }
+
+    // `page` at `path` inside `layouts` (outermost first), behind every one of `guards`.
+    define _add_chain(self, path: String, page: Callable, layouts: List, guards: List) -> Router {
         _install_on(self)
+        guard := _all_guards(guards)
         make := fn(req) {
             made: Component = page()
             made._guard = guard
             return made
         }
-        kind := ""
-        if layout != null {
-            probe := layout()
-            kind = type_name(probe)
-            if not has_field(probe, "_serial") { throw ValueError("live: router.add(layout=...): " + kind + " isn't a live.Layout") }
+        kinds := []
+        for l in layouts {
+            maker: Callable = l
+            probe := maker()
+            kind := type_name(probe)
+            if not has_field(probe, "_serial") { throw ValueError("live: layout=" + kind + " isn't a live.Layout") }
+            kinds.append(kind)
         }
-        _pages.append([web.Route("GET", path, make), make, layout, kind, guard])
+        _pages.append([web.Route("GET", path, make), make, layouts, kinds, guard])
         self.get(path, fn(req, res) {
             r: web.Request = req
             rs: web.Response = res
@@ -3396,7 +3462,7 @@ struct Router : web.Router {
                     return
                 }
             }
-            comp := layout != null ? _make_in_layout(layout, make, r) : _make(make, r)
+            comp := layouts.length() > 0 ? _make_in_layouts(layouts, make, r) : _make(make, r)
             rs.html(_page_html(comp))
         })
         return self
@@ -3408,7 +3474,7 @@ struct Router : web.Router {
     then `admin.add("/admin", AdminPage)`.
     ---
     define group(self, layout: Callable = null, guard: Callable = null) -> RouteGroup {
-        return RouteGroup(self, layout, guard)
+        return RouteGroup(self, layout != null ? [layout] : [], guard != null ? [guard] : [])
     }
 }
 
@@ -3429,19 +3495,51 @@ define require_login(redirect: String = "/login") -> Callable {
 --- Routes in one layout (Router.group). ---
 struct RouteGroup {
     router: Router
-    layout: Callable
-    guard: Callable
+    layouts: List
+    guards: List
 
-    define __init(self, router: Router, layout: Callable = null, guard: Callable = null) -> void {
+    define __init(self, router: Router, layouts: List, guards: List) -> void {
         self.router = router
-        self.layout = layout
-        self.guard = guard
+        self.layouts = layouts
+        self.guards = guards
     }
 
-    --- Serve `page` at `path`, in the group's layout, behind its guard. ---
+    --- Serve `page` at `path`, in the group's layouts, behind its guards. ---
     define add(self, path: String, page: Callable) -> RouteGroup {
-        self.router.add(path, page, layout=self.layout, guard=self.guard)
+        self.router._add_chain(path, page, self.layouts, self.guards)
         return self
+    }
+
+    ---
+    A group inside this one: its pages are in `layout` *inside* this group's
+    layout, behind this group's guard and `guard`. Going between its pages
+    keeps both layouts; going to one of the outer group's keeps the outer one.
+    ---
+    define group(self, layout: Callable = null, guard: Callable = null) -> RouteGroup {
+        ls := []
+        for l in self.layouts { ls.append(l) }
+        if layout != null { ls.append(layout) }
+        gs := []
+        for g in self.guards { gs.append(g) }
+        if guard != null { gs.append(guard) }
+        return RouteGroup(self.router, ls, gs)
+    }
+}
+
+// Several guards as one: the first that turns the visitor away decides.
+define _all_guards(guards: List) -> Callable {
+    if guards.length() == 0 { return null }
+    if guards.length() == 1 {
+        only: Callable = guards[0]
+        return only
+    }
+    return fn(req) {
+        for it in guards {
+            g: Callable = it
+            dest := _text(g(req))
+            if dest != "" { return dest }
+        }
+        return ""
     }
 }
 

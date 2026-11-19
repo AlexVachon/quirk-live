@@ -153,7 +153,8 @@ define test_leaving_the_layout_and_stale_events() -> void {
     test.assert_true(s.html.contains("menu 0"))
     test.assert_true(s.html.contains("loads=1 visits=1"))
     // A click on the page that's gone (its handler id) does nothing.
-    at := old.find("q-click=\"p1h")
+    at := old.find("q-click=\"h1.")
+    test.assert_true(at >= 0, old)
     rest := old.substring(at + 9, old.length())
     s.navigate("/todos")
     s.send(rest.substring(0, rest.find("\"")), {})
