@@ -124,6 +124,23 @@ check(await until(() => d().querySelectorAll('ul > li').length === 4), 'all four
 d().querySelector('ul > li button').click();
 check(await until(() => !d().querySelector('ul').textContent.includes('buy milk')), 'a TodoRow emits remove: the page removes the item');
 
+// The todos are in SQLite (src/store.qk): ticked off, seen by another tab, still there after a reload.
+const row = (text) => [...d().querySelectorAll('ul > li')].find(li => li.textContent.includes(text));
+row('walk the dog').querySelector('input[type=checkbox]').click();
+check(await until(() => !!row('walk the dog') && !!row('walk the dog').querySelector('span.done')), 'ticked: shown as done');
+check(d().querySelector('.left').textContent.trim().startsWith('2 left'), 'the count: ' + d().querySelector('.left').textContent.trim());
+const other = await open('/todos');
+const od = () => other.document;
+check(await until(() => !!od().querySelector('ul') && od().querySelector('ul').textContent.includes('feed the cat')), 'another visitor sees the same todos (the database)');
+check(!![...od().querySelectorAll('ul > li')].find(li => li.textContent.includes('walk the dog')).querySelector('span.done'), 'done there too');
+type(input('Something to do'), 'from tab one');
+button('Add').click();
+check(await until(() => od().querySelector('ul').textContent.includes('from tab one'), 3000), 'added in one tab: the other shows it (published)');
+other.close();
+const again = await open('/todos');
+check(await until(() => !!again.document.querySelector('ul') && again.document.querySelector('ul').textContent.includes('from tab one')), 'a new page load: still there');
+again.close();
+
 w.history.back();
 check(await until(() => !!d().querySelector('.count')), 'Back: the counter page again');
 

@@ -1,0 +1,35 @@
+// A Bool prop is what it's given: `:done="false"`, `:done="item.done == 1"`
+// for a row that isn't done (it was always true: needs compiler 7.51.0).
+use live
+use test
+
+struct Flag : live.Component {
+    on: Bool
+
+    define template(self) -> String {
+        return r"""<i :class="on ? 'on' : 'off'">{{ on }}</i>"""
+    }
+}
+
+struct Flags : live.Component {
+    items: List
+
+    define template(self) -> String {
+        return r"""{% for it in items %}<Flag :on="it.d == 1" :key="it.id" />{% end %}<Flag :on="false" /><Flag :on="true" /><Flag on="false" />"""
+    }
+}
+
+define test_bool_props() -> void {
+    p := Flags()
+    p.items = [{"id": 1, "d": 1}, {"id": 2, "d": 0}]
+    html := p._root_html()
+    want := ["on", "off", "off", "on", "off"]
+    got := []
+    rest := html
+    while rest.contains("class=\"") {
+        at := rest.find("class=\"")
+        rest = rest.substring(at + 7, rest.length())
+        got.append(rest.substring(0, rest.find("\"")))
+    }
+    test.assert_eq(", ".join(got), ", ".join(want), html)
+}

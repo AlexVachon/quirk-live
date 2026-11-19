@@ -104,6 +104,11 @@ define main() -> void {
 list with live search, notifications, navigation — is in `examples/app`
 (pages in `src/pages/`):
 `cd examples/app && quirk run main.qk`, then open http://localhost:3000.
+Its todos are kept in SQLite (`src/store.qk`, the
+[`sqlite`](https://github.com/AlexVachon/quirk-sqlite) package, in
+`todos.db`): still there after a restart, shared by every visitor, and
+changed in every open tab at once (`live.publish`). The demo needs Quirk
+7.51.0 or later.
 
 ## Components
 

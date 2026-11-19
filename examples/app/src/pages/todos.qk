@@ -1,47 +1,57 @@
 use live
+from src.store use { db }
 
+---
+The todos are in the app's SQLite database (src/store.qk): they're still
+there after a restart, and every visitor sees the same list. A change is
+published to "todos", so the other open Todos pages show it at once.
+---
 struct TodoPage : live.Page {
-    items: List
     draft: String
     filter: String
 
     define on_load(self) -> void {
-        // Load from a database or an API here.
-        self.items = ["buy milk", "write docs"]
         self.draft = ""
         self.filter = ""
+        self.subscribe("todos")
     }
 
     define add(self) -> void {
         t := self.draft.trim()
-        if t != "" { self.items.append(t) }
+        if t != "" {
+            db().insert("INSERT INTO todos (text) VALUES (?)", [t])
+            live.publish("todos")
+        }
         self.draft = ""
     }
 
-    define remove(self, index: Int) -> void {
-        kept := []
-        j := 0
-        for it in self.items {
-            if j != index { kept.append(it) }
-            j = j + 1
-        }
-        self.items = kept
+    define remove(self, id: Int) -> void {
+        db().execute("DELETE FROM todos WHERE id = ?", [id])
+        live.publish("todos")
     }
 
-    // The items matching the search, with their index in `items`.
+    define toggle(self, id: Int) -> void {
+        db().execute("UPDATE todos SET done = 1 - done WHERE id = ?", [id])
+        live.publish("todos")
+    }
+
+    define clear_done(self) -> void {
+        n := db().execute("DELETE FROM todos WHERE done = 1")
+        if n > 0 { self.notify("Cleared " + String(n) + " done", type="success", duration=2000) }
+        live.publish("todos")
+    }
+
+    // The todos matching the search (read on each render, so always current).
     define shown(self) -> List {
-        out := []
-        i := 0
-        for it in self.items {
-            text: String = it
-            if self.filter == "" or text.contains(self.filter) { out.append({"text": text, "index": i}) }
-            i = i + 1
-        }
-        return out
+        return db().query("SELECT id, text, done FROM todos WHERE instr(lower(text), lower(?)) > 0 ORDER BY id", [self.filter.trim()])
+    }
+
+    define left(self) -> Int {
+        return Int(db().value("SELECT count(*) FROM todos WHERE done = 0"))
     }
 
     define title(self) -> String {
-        return "Todos (" + String(self.items.length()) + ")"
+        return "Todos (" + String(self.left()) + ")"
     }
 
     define template(self) -> String {
@@ -54,32 +64,43 @@ struct TodoPage : live.Page {
             <input model="filter" placeholder="Search">
             <ul>
               {% for item in shown %}
-                <TodoRow :text="item.text" :index="item.index" :key="item.index" @remove="remove" />
+                <TodoRow :id="item.id" :text="item.text" :done="item.done == 1" :key="item.id" @remove="remove" @toggle="toggle" />
               {% else %}
                 <li class="empty">Nothing here</li>
               {% end %}
             </ul>
+            <p class="left">{{ left }} left <button class="link" @click="clear_done">Clear done</button></p>
         """
     }
 }
 
-// One line of the list; tells the page when its × is clicked.
+// One line of the list; tells the page when it's ticked or its × clicked.
 struct TodoRow : live.Component {
+    id: Int
     text: String
-    index: Int
+    done: Bool
 
     define remove(self) -> void {
-        self.emit("remove", self.index)
+        self.emit("remove", self.id)
+    }
+
+    define toggle(self) -> void {
+        self.emit("toggle", self.id)
     }
 
     define template(self) -> String {
         return r"""
             <style scoped>
               li { display: flex; gap: .5rem; align-items: center; }
+              .done { text-decoration: line-through; color: #6b7280; }
               .remove { border: none; background: none; color: #dc2626; font-size: 1.1rem; cursor: pointer; }
               .remove:hover { color: #991b1b; }
             </style>
-            <li>{{ text }} <button class="remove" @click="remove" aria-label="Remove {{ text }}">×</button></li>
+            <li>
+              <input type="checkbox" :checked="done" @change="toggle" aria-label="Done: {{ text }}">
+              <span :class="done ? 'done' : ''">{{ text }}</span>
+              <button class="remove" @click="remove" aria-label="Remove {{ text }}">×</button>
+            </li>
         """
     }
 }

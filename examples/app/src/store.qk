@@ -1,0 +1,29 @@
+// The app's database: one SQLite file, todos.db next to main.qk — what's
+// in it is still there after a restart. Opened (and the table made) the
+// first time it's needed; every page shares the one connection.
+use sqlite
+
+db_path: String = "todos.db"
+_db: sqlite.Database = null
+
+// Use another file (or ":memory:") — before the first db().
+define use_database(path: String) -> void {
+    db_path = path
+}
+
+define db() -> sqlite.Database {
+    if _db == null {
+        _db = sqlite.open(db_path)
+        _db.script("""
+            CREATE TABLE IF NOT EXISTS todos (
+                id   INTEGER PRIMARY KEY,
+                text TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        if Int(_db.value("SELECT count(*) FROM todos")) == 0 {
+            _db.execute_many("INSERT INTO todos (text) VALUES (?)", [["buy milk"], ["write docs"]])
+        }
+    }
+    return _db
+}

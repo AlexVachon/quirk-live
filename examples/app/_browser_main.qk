@@ -2,8 +2,10 @@
 use web
 use sys
 from router use { router }
+from src.store use { use_database }
 
 define main() -> void {
+    use_database(":memory:")          // each run starts from the same two todos
     app := web.App()
     app.use(web.static("public"))
     app.use(web.sessions())

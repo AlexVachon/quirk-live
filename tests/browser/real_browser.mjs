@@ -71,9 +71,9 @@ await page.click('a[href="/todos"]');
 await page.waitForSelector('input[placeholder="Search"]');
 const search = page.locator('input[placeholder="Search"]');
 await search.click();
-await page.keyboard.type('buy mi', { delay: 60 });
+await page.keyboard.type('write d', { delay: 60 });          // (live_pages.mjs removed "buy milk")
 await page.waitForTimeout(500);
-check(await search.inputValue() === 'buy mi', 'typed while the list filtered: every character kept (' + await search.inputValue() + ')');
+check(await search.inputValue() === 'write d', 'typed while the list filtered: every character kept (' + await search.inputValue() + ')');
 check(await search.evaluate(e => e === document.activeElement), 'and the field kept its focus');
 check(await page.locator('ul > li').count() === 1, 'the list filtered live');
 // <style scoped> in TodoRow: its × is red; the page's own buttons aren't touched.
@@ -84,7 +84,7 @@ check(addColor !== 'rgb(220, 38, 38)', 'and only there: the page\'s Add button i
 const rowAttr = await page.locator('button.remove').first().evaluate(e => [...e.attributes].map(a => a.name).find(n => n.startsWith('data-q-')));
 check(!!rowAttr && !(await page.locator('button:has-text("Add")').evaluate((e, a) => e.hasAttribute(a), rowAttr)), 'the scope attribute is on TodoRow\'s elements only (' + rowAttr + ')');
 const caret = await search.evaluate(e => e.selectionStart);
-check(caret === 6, 'the caret stayed at the end (' + caret + ')');
+check(caret === 7, 'the caret stayed at the end (' + caret + ')');
 await search.fill('');
 await search.dispatchEvent('input');
 
