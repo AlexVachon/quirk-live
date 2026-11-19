@@ -73,6 +73,13 @@ struct TodoRow : live.Component {
     }
 
     define template(self) -> String {
-        return r"""<li>{{ text }} <button class="remove" @click="remove" aria-label="Remove {{ text }}">×</button></li>"""
+        return r"""
+            <style scoped>
+              li { display: flex; gap: .5rem; align-items: center; }
+              .remove { border: none; background: none; color: #dc2626; font-size: 1.1rem; cursor: pointer; }
+              .remove:hover { color: #991b1b; }
+            </style>
+            <li>{{ text }} <button class="remove" @click="remove" aria-label="Remove {{ text }}">×</button></li>
+        """
     }
 }

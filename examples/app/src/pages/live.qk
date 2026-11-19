@@ -41,6 +41,10 @@ struct LivePage : live.Page {
 
     define template(self) -> String {
         return r"""
+            <style scoped>
+              .clock { font-variant-numeric: tabular-nums; color: #2f6fe0; }
+              .chat li { padding: .15rem 0; }
+            </style>
             <h1>Live</h1>
             <p class="clock">Open for {{ seconds }} s</p>
             <h2>Chat <small class="here">{{ here }} here</small></h2>

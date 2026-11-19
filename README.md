@@ -142,6 +142,32 @@ are re-read when they change.
 | `title="Hi {{ name }}"` | `{{ }}` works in attributes |
 | `<a href="/todos" q-link>` | go to another page without a reload (Back / Forward work) |
 
+### Styles for one component
+
+A `<style scoped>` in a component's template applies to that component's
+elements only — not to the page around it, not to the components inside it:
+
+```quirk
+define template(self) -> String {
+    return r"""
+        <style scoped>
+          .title { color: #2f6fe0; }
+          button:hover { background: #eef; }
+        </style>
+        <h1 class="title">{{ name }}</h1>
+        <button @click="save">Save</button>
+    """
+}
+```
+
+Each component type gets an attribute (`data-q-3fa2c1`) on the elements its
+template writes, and its selectors are rewritten to need it
+(`.title` → `.title[data-q-3fa2c1]`; `@media` blocks too, `@keyframes`
+as they are). What a `<slot />` shows belongs to the component that wrote
+it, and gets that one's styles. The CSS is added to the page once per
+component type, however many are shown. A `<style>` without `scoped` is
+global, as in any page.
+
 ### Using components
 
 A tag named like a struct is that component: `<PlusButton />`, or with

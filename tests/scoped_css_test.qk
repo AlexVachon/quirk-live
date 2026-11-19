@@ -1,0 +1,116 @@
+// <style scoped> in a component's template: its CSS applies to its own
+// elements only (a data-q-xxxxxx attribute on them, the selectors rewritten).
+use web
+use live
+use test
+
+struct Badge : live.Component {
+    text: String
+
+    define template(self) -> String {
+        return r"""
+            <style scoped>
+              .title { color: red; }
+            </style>
+            <span class="title">{{ text }}</span>
+        """
+    }
+}
+
+struct Card : live.Component {
+    define template(self) -> String {
+        return r"""
+            <style scoped>
+              .title { font-weight: bold; }
+              .box .title:hover::before { content: "> "; }
+              h2, .title > b { margin: 0; }
+              @media (max-width: 600px) { .box { padding: 0; } }
+              @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+            </style>
+            <div class="box"><h2 class="title">Card</h2><slot /></div>
+        """
+    }
+}
+
+struct CssPage : live.Page {
+    define template(self) -> String {
+        return r"""
+            <style scoped>
+              p { color: green; }
+            </style>
+            <style>.global-rule { color: blue; }</style>
+            <Card><p class="mine">from the page</p><Badge text="inside" /></Card>
+            <Badge text="one" />
+            <Badge text="two" />
+        """
+    }
+}
+
+struct WrapLayout : live.Layout {
+    define template(self) -> String {
+        return r"""<style scoped>nav { color: gray; }</style><nav>menu</nav><slot />"""
+    }
+}
+
+define make_app() -> web.App {
+    router := live.Router()
+    router.add("/", CssPage)
+    router.add("/in-layout", CssPage, layout=WrapLayout)
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define attr_of(html: String, marker: String) -> String {
+    // the data-q-xxxxxx on the start tag right before `marker`
+    at := html.find(marker)
+    pieces := html.substring(0, at).split("<")
+    tag: String = pieces[pieces.length() - 1]
+    d := tag.find("data-q-")
+    if d < 0 { return "" }
+    return tag.substring(d, d + 13)
+}
+
+define count(html: String, piece: String) -> Int {
+    return html.split(piece).length() - 1
+}
+
+define test_elements_get_their_component_scope() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    card := attr_of(s.html, ">Card</h2>")
+    badge := attr_of(s.html, ">one</span>")
+    page := attr_of(s.html, ">from the page</p>")
+    test.assert_true(card.startswith("data-q-") and badge.startswith("data-q-") and page.startswith("data-q-"), s.html)
+    test.assert_true(card != badge and card != page and badge != page)    // one scope per component type
+    test.assert_eq(attr_of(s.html, ">two</span>"), badge)                  // the same type: the same scope
+    test.assert_eq(attr_of(s.html, ">inside</span>"), badge)               // a child keeps its own scope
+}
+
+define test_css_rewritten_and_sent_once() -> void {
+    s := live.TestSession(make_app())
+    s.open("/")
+    card := attr_of(s.html, ">Card</h2>")
+    badge := attr_of(s.html, ">one</span>")
+    test.assert_true(s.html.contains(".title[" + card + "] {"), s.html)
+    test.assert_true(s.html.contains(".box .title:hover[" + card + "]::before {"))
+    test.assert_true(s.html.contains("h2[" + card + "], .title > b[" + card + "] {"))
+    test.assert_true(s.html.contains("@media (max-width: 600px) {"))
+    test.assert_true(s.html.contains(".box[" + card + "] { padding: 0; }"))
+    test.assert_true(s.html.contains("@keyframes pop { from { opacity: 0; }"))        // as it is
+    test.assert_true(s.html.contains(".title[" + badge + "] { color: red; }"))
+    test.assert_eq(count(s.html, ".title[" + badge + "]"), 1)                         // Badge shown 3 times, its CSS once
+    test.assert_true(s.html.contains("<style>.global-rule { color: blue; }</style>"))  // not scoped: global
+    test.assert_false(s.html.contains("<style scoped>"))
+}
+
+define test_a_page_in_a_layout_keeps_its_styles() -> void {
+    s := live.TestSession(make_app())
+    s.open("/in-layout")
+    nav := attr_of(s.html, ">menu</nav>")
+    test.assert_true(nav != "")
+    test.assert_true(s.html.contains("nav[" + nav + "] {"))
+    test.assert_true(s.html.contains(".title[" + attr_of(s.html, ">Card</h2>") + "]"))   // the page's components too
+    s.send("p1h1", {})                                                                     // (an event: rendered again)
+    test.assert_true(s.html.contains("nav[" + nav + "] {"))
+}

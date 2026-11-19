@@ -96,6 +96,7 @@ named after the struct (`counter_page.html`) next to the `.qk` file:
     <PlusButton :page="self" />                 another component, by its struct's name
     {% if count >= 10 %}<p>a lot</p>{% end %}
     {% for i, item in items %}<li>{{ item }}</li>{% else %}<li>none</li>{% end %}
+    <style scoped> .title { color: red } </style>   CSS for this component's elements only
 
 `on_load()` sets it up (once). Events call its methods by name; the page
 is rendered again after each one. Props: `text="hi {{ name }}"` sets the
@@ -125,6 +126,7 @@ struct Component {
     _hid: String          // its handler ids' prefix ("h"; a page in a layout: "p3h")
     _guard: Callable      // the route's guard (router.add(..., guard=))
     _now_req: web.Request // the request being handled (an event's), on the root
+    _styles: Map          // the root: the scoped CSS of the components shown (scope → CSS)
     _dirty: Bool          // the root: changed since the browser last saw it (refresh)
     _gone: Bool           // a page replaced in its layout: its timers stop
     _streams: Int         // the root: browser streams connected now
@@ -148,6 +150,7 @@ struct Component {
         self._hid = "h"
         self._guard = null
         self._now_req = null
+        self._styles = {}
         self._dirty = false
         self._gone = false
         self._streams = 0
@@ -454,7 +457,19 @@ _note_icons := {"success": "✓", "warning": "!", "info": "i", "error": "✕"}
 
 // What the page shows: the component, then its notifications.
 define _body(comp: Component) -> String {
-    return comp.render() + _notes_html(comp)
+    html := comp.render()
+    return html + _styles_html(comp) + _notes_html(comp)
+}
+
+// The scoped CSS of the components shown, one <style> each (kept by key).
+define _styles_html(root: Component) -> String {
+    if root._styles == null { return "" }
+    out := ""
+    for k in root._styles.keys() {
+        key: String = k
+        out = out + "<style q-key=\"q-css-" + key + "\">" + String(root._styles[key]) + "</style>"
+    }
+    return out
 }
 
 define _known_position(p: String) -> Bool {
@@ -741,6 +756,9 @@ define _ttokens(src: String) -> List {
     n := web.byte_length(src)
     i := 0
     start := 0
+    // With a <style scoped>, every element is written by the engine (to
+    // carry the component's scope attribute), not only special ones.
+    every_tag := src.contains("<style scoped")
     while i < n {
         lt := web.byte_find(src, "<", i)
         ex := web.byte_find(src, "{{", i)
@@ -764,7 +782,23 @@ define _ttokens(src: String) -> List {
             end := _tag_end(src, nxt, n)
             if end < 0 { _tfail("a tag without '>'") }
             raw := web.byte_slice(src, nxt + 1, end - nxt - 1)
-            if _special_tag(raw) {
+            if raw.startswith("style") and (" " + raw + " ").contains(" scoped ") {
+                close := web.byte_find(src, "</style>", end + 1)
+                if close < 0 { _tfail("<style scoped> without </style>") }
+                if nxt > start { out.append(["text", web.byte_slice(src, start, nxt - start)]) }
+                out.append(["css", web.byte_slice(src, end + 1, close - end - 1)])
+                i = close + 8
+                start = i
+                continue
+            }
+            if raw.startswith("style") or raw.startswith("script") {
+                // (their insides are text, not tags)
+                closer := raw.startswith("style") ? "</style>" : "</script>"
+                close := web.byte_find(src, closer, end + 1)
+                i = close < 0 ? end + 1 : close + web.byte_length(closer)
+                continue
+            }
+            if _special_tag(raw) or every_tag {
                 if nxt > start { out.append(["text", web.byte_slice(src, start, nxt - start)]) }
                 out.append(["open", raw])
                 i = end + 1
@@ -865,6 +899,8 @@ struct _TParser {
             self.pos = self.pos + 1
             if kind == "text" {
                 out.append(_TNode("text", value))
+            } elif kind == "css" {
+                out.append(_TNode("css", value))
             } elif kind == "expr" {
                 if value.endswith("| raw") {
                     out.append(_TNode("raw", web.byte_slice(value, 0, web.byte_length(value) - 5).trim()))
@@ -1021,6 +1057,7 @@ struct _Ctx {
     select_value: Any
     has_select: Bool
     root_key: String     // set until the component's first element is written: its q-key
+    scope: String        // the component's scope attribute ("data-q-3fa2c1"), with a <style scoped>
 
     define __init(self, root: Component, comp: Component, key: String) -> void {
         self.root = root
@@ -1033,6 +1070,7 @@ struct _Ctx {
         self.select_value = null
         self.has_select = false
         self.root_key = ""
+        self.scope = ""
     }
 
     define lookup(self, name: String) -> Any {
@@ -1502,6 +1540,7 @@ define _render_tag(node: _TNode, ctx: _Ctx) -> String {
             }
         }
     }
+    if ctx.scope != "" { attrs = attrs + " " + ctx.scope }
     // A component's first element carries its key: the browser matches it
     // by key when the page changes (moved, not rewritten — a list keeps
     // each item's own element).
@@ -1575,7 +1614,9 @@ define _render_comp(node: _TNode, ctx: _Ctx) -> String {
     inner.root_key = key
     inner.slot = node.children
     inner.slot_ctx = ctx
-    return _render_nodes(_parse_template(_template_of(child)), inner)
+    nodes := _parse_template(_template_of(child))
+    inner.scope = _scope_for(nodes, child)
+    return _render_nodes(nodes, inner)
 }
 
 // Set field `name` of `obj` to `value`, converting text to the field's
@@ -1653,6 +1694,11 @@ define _render_nodes(nodes: List, ctx: _Ctx) -> String {
                 count = i
             }
             if count == 0 { out = out + _render_nodes(node.otherwise, ctx) }
+        } elif k == "css" {
+            if ctx.root._styles == null { ctx.root._styles = {} }
+            if ctx.scope != "" and not ctx.root._styles.has(ctx.scope) {
+                ctx.root._styles[ctx.scope] = _scope_css_cached(node.text, ctx.scope)
+            }
         } elif k == "tag" {
             out = out + _render_tag(node, ctx)
         } elif k == "comp" {
@@ -1666,6 +1712,154 @@ define _render_nodes(nodes: List, ctx: _Ctx) -> String {
         }
     }
     return out
+}
+
+// The scope attribute of a component whose template has a <style scoped>
+// ("data-q-" + 6 hex of its type name); "" otherwise.
+define _scope_for(nodes: List, comp: Component) -> String {
+    for n in nodes {
+        node: _TNode = n
+        if node.kind == "css" { return "data-q-" + crypto.sha1(type_name(comp)).substring(0, 6) }
+    }
+    return ""
+}
+
+_css_cache := {}
+
+define _scope_css_cached(css: String, scope: String) -> String {
+    key := scope + "|" + css
+    if not _css_cache.has(key) { _css_cache[key] = _scope_css(css, "[" + scope + "]") }
+    return String(_css_cache[key])
+}
+
+// `css` with each rule's selectors limited to elements carrying `attr`:
+// `.a .b:hover::before` → `.a .b:hover[data-q-x]::before`. @media /
+// @supports / @container / @layer blocks are scoped inside; @keyframes,
+// @font-face and other at-rules are kept as they are.
+define _scope_css(css: String, attr: String) -> String {
+    text := _strip_css_comments(css)
+    out := ""
+    n := web.byte_length(text)
+    i := 0
+    while i < n {
+        open := web.byte_find(text, "{", i)
+        semi := web.byte_find(text, ";", i)
+        if open < 0 {
+            out = out + web.byte_slice(text, i, n - i)
+            break
+        }
+        prelude := web.byte_slice(text, i, open - i)
+        if prelude.trim().startswith("@") and semi >= 0 and semi < open {
+            out = out + web.byte_slice(text, i, semi + 1 - i)          // @import ...;
+            i = semi + 1
+            continue
+        }
+        close := _css_block_end(text, open, n)
+        inner := web.byte_slice(text, open + 1, close - open - 1)
+        head := prelude.trim()
+        if head.startswith("@") {
+            nested := head.startswith("@media") or head.startswith("@supports") or head.startswith("@container") or head.startswith("@layer") or head.startswith("@document")
+            out = out + head + " {" + (nested ? "\n" + _scope_css(inner, attr) : inner) + "}\n"
+        } else {
+            parts := []
+            for sel in _css_split_selectors(prelude) {
+                parts.append(_scope_selector(String(sel), attr))
+            }
+            out = out + ", ".join(parts) + " {" + inner + "}\n"
+        }
+        i = close + 1
+    }
+    return out
+}
+
+define _strip_css_comments(css: String) -> String {
+    out := ""
+    rest := css
+    while true {
+        at := rest.find("/*")
+        if at < 0 { break }
+        out = out + rest.substring(0, at)
+        after := rest.substring(at + 2, rest.length())
+        end := after.find("*/")
+        if end < 0 { return out }
+        rest = after.substring(end + 2, after.length())
+    }
+    return out + rest
+}
+
+// The index of the `}` closing the block opened at `open`.
+define _css_block_end(text: String, open: Int, n: Int) -> Int {
+    depth := 0
+    j := open
+    quote := ""
+    while j < n {
+        c := web.byte_slice(text, j, 1)
+        if quote != "" {
+            if c == quote { quote = "" }
+        } elif c == "\"" or c == "'" {
+            quote = c
+        } elif c == "{" {
+            depth = depth + 1
+        } elif c == "}" {
+            depth = depth - 1
+            if depth == 0 { return j }
+        }
+        j = j + 1
+    }
+    return n
+}
+
+// Selectors separated by commas outside ( ) and [ ].
+define _css_split_selectors(prelude: String) -> List {
+    out := []
+    depth := 0
+    cur := ""
+    n := web.byte_length(prelude)
+    j := 0
+    while j < n {
+        c := web.byte_slice(prelude, j, 1)
+        if c == "(" or c == "[" { depth = depth + 1 }
+        if c == ")" or c == "]" { depth = depth - 1 }
+        if c == "," and depth == 0 {
+            out.append(cur)
+            cur = ""
+        } else {
+            cur = cur + c
+        }
+        j = j + 1
+    }
+    out.append(cur)
+    return out
+}
+
+// One selector, scoped: `attr` on its last compound, before a pseudo-element.
+define _scope_selector(sel: String, attr: String) -> String {
+    s := sel.trim()
+    if s == "" { return s }
+    // where the last compound starts: after the last combinator outside ( ) [ ]
+    n := web.byte_length(s)
+    last := 0
+    depth := 0
+    j := 0
+    while j < n {
+        c := web.byte_slice(s, j, 1)
+        if c == "(" or c == "[" { depth = depth + 1 }
+        if c == ")" or c == "]" { depth = depth - 1 }
+        if depth == 0 and (c == " " or c == ">" or c == "+" or c == "~") { last = j + 1 }
+        j = j + 1
+    }
+    tail := web.byte_slice(s, last, n - last)
+    pe := tail.find("::")
+    if pe < 0 {
+        for legacy in [":before", ":after", ":first-line", ":first-letter"] {
+            l: String = legacy
+            if tail.endswith(l) { pe = tail.length() - l.length() }
+        }
+    }
+    if tail == "" or tail == "*" { return web.byte_slice(s, 0, last) + attr }
+    if pe < 0 { return s + attr }
+    head := web.byte_slice(s, 0, last)
+    return head + tail.substring(0, pe) + attr + tail.substring(pe, tail.length())
 }
 
 _tpl_files := {}
@@ -1727,7 +1921,19 @@ define _render_root(comp: Component) -> String {
     comp._handlers = {}
     comp._seen = {}
     comp._next = 0
-    out := _render_nodes(_parse_template(_template_of(comp)), _Ctx(comp, comp, ""))
+    comp._styles = {}
+    nodes := _parse_template(_template_of(comp))
+    top := _Ctx(comp, comp, "")
+    top.scope = _scope_for(nodes, comp)
+    out := _render_nodes(nodes, top)
+    // A page inside a layout: its styles go with the layout's.
+    if comp._outer != null {
+        if comp._outer._styles == null { comp._outer._styles = {} }
+        for k in comp._styles.keys() {
+            key: String = k
+            comp._outer._styles[key] = comp._styles[key]
+        }
+    }
     kept := {}
     for k in comp._children.keys() {
         key: String = k
@@ -2827,7 +3033,7 @@ _client_js := """(function () {
 // The script's URL with its version: a new live is picked up at once (the
 // browser kept an older script for an hour, so new features — transitions —
 // did nothing until then).
-_live_js_url := "/_live/live.js?v=2.6.0-" + String(web.byte_length(_client_js))
+_live_js_url := "/_live/live.js?v=2.7.0-" + String(web.byte_length(_client_js))
 
 
 // ===== serving =====
