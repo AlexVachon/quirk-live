@@ -104,6 +104,15 @@ await page.goForward();
 await page.waitForSelector('#hello');
 check(new URL(page.url()).pathname === '/hello/world', 'Forward: hello again');
 
+// ---- Not found: a page of the app's own, in its layout, with a 404 ----
+const errorsBefore = errors.length;
+const missing = await page.goto(base + '/no/such/page');
+errors.splice(errorsBefore).filter(e => !/status of 404/.test(e)).forEach(e => errors.push(e));   // (that 404 is the point)
+check(missing.status() === 404, 'a path no page has: 404 (' + missing.status() + ')');
+check(await page.locator('.not-found').count() === 1 && await page.locator('.layout nav').count() === 1, 'the not-found page, in the layout');
+await page.goto(base + '/');
+await page.waitForSelector('.count');
+
 // ---- Login: the cookie is HttpOnly ----
 await page.click('a[href="/account"]');
 await page.waitForSelector('input[placeholder="Password"]');

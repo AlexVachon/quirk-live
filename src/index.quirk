@@ -2958,7 +2958,11 @@ define _find(id: String) -> Component {
 // timers and subscriptions stop, its session goes.
 define _leave(r: web.Request) -> void {
     if not r.query.has("from") { return }
-    old_id := String(r.query["from"])
+    _drop(String(r.query["from"]))
+}
+
+// The root `old_id` isn't on screen any more: forget it (its timers stop).
+define _drop(old_id: String) -> void {
     if not _sessions.has(old_id) { return }
     entry: List = _sessions[old_id]
     old: Component = entry[0]
@@ -3050,9 +3054,12 @@ _client_js := """(function () {
   function apply(root, res) {
     if (res.reload) { location.reload(); return; }
     if (res.redirect) { navigate(res.redirect, true); return; }
+    // (the error page, shown in place of a page that failed: a new root)
+    if (res.id && root.getAttribute('q-root') !== res.id) root.setAttribute('q-root', res.id);
     if (typeof res.html === 'string') morph(root, res.html);
     if (res.title) document.title = res.title;
     startTimers();
+    if (res.id) listen();
   }
   function morph(root, html) {
     var t = document.createElement('div');
@@ -3386,6 +3393,158 @@ define page(app: web.App, path: String, factory: Callable) -> void {
 }
 
 // A new layout (stored as the session) showing a new page.
+// The type names of `layouts` (a live.Layout each, or ValueError).
+define _layout_kinds(layouts: List) -> List {
+    kinds := []
+    for l in layouts {
+        maker: Callable = l
+        probe := maker()
+        kind := type_name(probe)
+        if not has_field(probe, "_serial") { throw ValueError("live: layout=" + kind + " isn't a live.Layout") }
+        kinds.append(kind)
+    }
+    return kinds
+}
+
+// The page inside a root (through its layouts).
+define _innermost(c: Component) -> Component {
+    cur := c
+    while true {
+        nxt := cur._inner()
+        if nxt == null { return cur }
+        cur = nxt
+    }
+    return cur
+}
+
+// A page opened in place (a q-link, the not-found / error page): the layouts
+// it shares with the root `from_id` (from the outermost in) stay, the rest
+// is made anew inside them; answered as JSON. `prepare(page)` (if not null)
+// runs on the new page before it's rendered.
+define _nav_show(r: web.Request, rs: web.Response, nav: web.Request, layouts: List, kinds: List,
+                 factory: Callable, from_id: String, prepare: Callable, status: Int) -> void {
+    here := from_id != "" ? _find(from_id) : null
+    if kinds.length() > 0 and here != null and type_name(here) == String(kinds[0]) {
+        kept := [here]
+        cur: Component = here
+        depth := 1
+        while depth < kinds.length() {
+            nxt := cur._inner()
+            if nxt == null or type_name(nxt) != String(kinds[depth]) or not has_field(nxt, "_serial") { break }
+            cur = nxt
+            kept.append(cur)
+            depth = depth + 1
+        }
+        k := 0
+        while k < kept.length() - 1 {                // around the one that changes: path, on_navigate
+            up: Component = kept[k]
+            up._touch(nav)
+            k = k + 1
+        }
+        _fill_layouts(cur, layouts, depth, factory, nav)
+        if prepare != null { prepare(_innermost(here)) }
+        rs.status(status).json({"id": here.id, "html": _body(here), "title": here.title(), "kept": true})
+        return
+    }
+    comp := kinds.length() > 0 ? _make_in_layouts(layouts, factory, nav) : _make(factory, nav)
+    if prepare != null { prepare(_innermost(comp)) }
+    if from_id != "" { _drop(from_id) }
+    rs.status(status).json({"id": comp.id, "html": _body(comp), "title": comp.title()})
+}
+
+// ----- the not-found and error pages -----
+
+_special := {}            // "404" / "500" → [layouts, the page struct, the layouts' type names]
+_special_hooked := []     // the routers whose not-found / error handlers are live's
+
+define _set_special(router: Router, kind: String, page: Callable, layouts: List) -> void {
+    _special[kind] = [layouts, page, _layout_kinds(layouts)]
+    for h in _special_hooked {
+        known: Router = h
+        if known == router { return }
+    }
+    _special_hooked.append(router)
+    router.on_not_found(fn(req, res) { _special_not_found(req, res) })
+    router.on_error(fn(e, req, res) { _special_error(e, req, res) })
+}
+
+// A browser asking for a page (not an API call, a form post, an asset).
+define _wants_page(r: web.Request) -> Bool {
+    return r.method == "GET" and r.accepts("html") and not r.accepts_only_json()
+}
+
+define _special_not_found(req: Any, res: Any) -> void {
+    r: web.Request = req
+    rs: web.Response = res
+    if not _special.has("404") or not _wants_page(r) { return }     // the app's default answer
+    _show_special("404", r, rs, 404, "", "")
+}
+
+define _special_error(e: Any, req: Any, res: Any) -> void {
+    r: web.Request = req
+    rs: web.Response = res
+    err: Exception = e
+    status := 500
+    message := ""
+    if has_field(e, "status") {                        // a web.HttpError: meant for the visitor
+        he: web.HttpError = e
+        status = he.status
+        message = he.message
+    }
+    kind := status == 404 and _special.has("404") ? "404" : "500"
+    if not _special.has(kind) { return }
+    if not r.path.startswith("/_live/") and not _wants_page(r) { return }
+    if r.path == "/_live/stream" or r.path == "/_live/live.js" { return }
+    if status >= 500 { print("live: " + r.method + " " + r.url + " failed: " + err.message) }
+    detail := ""
+    if sys.getenv("QUIRK_ENV") != "production" {
+        detail = err.type + ": " + err.message
+        if err.traceback != "" { detail = detail + "\n" + err.traceback }
+    }
+    _show_special(kind, r, rs, status, message, detail)
+}
+
+// The not-found / error page for request `r`: a whole page for a page
+// load, or in place (JSON, its layout kept) for a q-link or an event.
+define _show_special(kind: String, r: web.Request, rs: web.Response, status: Int, message: String, detail: String) -> void {
+    entry: List = _special[kind]
+    layouts: List = entry[0]
+    make: Callable = entry[1]
+    kinds: List = entry[2]
+    factory := fn(q) {
+        p: Component = make()
+        return p
+    }
+    target := r.path
+    from_id := ""
+    if r.path == "/_live/nav" {
+        target = r.query.has("path") ? String(r.query["path"]) : "/"
+        from_id = r.query.has("from") ? String(r.query["from"]) : ""
+    } elif r.path == "/_live/event" {
+        msg: Map = r.json()
+        from_id = msg != null and msg.has("id") ? String(msg["id"]) : ""
+        old := from_id != "" ? _find(from_id) : null
+        if old != null and old.request != null { target = old.request.url }
+    }
+    shown_path := target.find("?") >= 0 ? target.substring(0, target.find("?")) : target
+    prepare := fn(pg) {
+        page: Component = pg
+        if has_field(page, "status") { set_field(page, "status", status) }
+        if has_field(page, "message") { set_field(page, "message", message) }
+        if has_field(page, "error") { set_field(page, "error", detail) }
+        if has_field(page, "path") { set_field(page, "path", shown_path) }
+    }
+    if not r.path.startswith("/_live/") {
+        comp := layouts.length() > 0 ? _make_in_layouts(layouts, factory, r) : _make(factory, r)
+        prepare(_innermost(comp))
+        rs.status(status).html(_page_html(comp))
+        return
+    }
+    nav := web.Request("GET", target, r.headers)
+    nav._session = r._session
+    _nav_show(r, rs, nav, layouts, kinds, factory, from_id, prepare, status)
+}
+
 // New layouts, outermost first (the outermost stored as the session), each
 // in the slot of the one around it, then a new page in the innermost.
 define _make_in_layouts(layouts: List, factory: Callable, req: web.Request) -> Component {
@@ -3635,42 +3794,15 @@ define _install_on(app: web.Router) -> void {
                         return
                     }
                 }
-                if kinds.length() > 0 {
-                    layouts: List = entry[2]
-                    // The layouts this page shares with the one we're on (from
-                    // the outermost in) stay; the rest is made anew inside them.
-                    here := r.query.has("from") ? _find(String(r.query["from"])) : null
-                    if here != null and type_name(here) == String(kinds[0]) {
-                        kept := [here]
-                        cur: Component = here
-                        depth := 1
-                        while depth < kinds.length() {
-                            nxt := cur._inner()
-                            if nxt == null or type_name(nxt) != String(kinds[depth]) or not has_field(nxt, "_serial") { break }
-                            cur = nxt
-                            kept.append(cur)
-                            depth = depth + 1
-                        }
-                        k := 0
-                        while k < kept.length() - 1 {                // around the one that changes: path, on_navigate
-                            up: Component = kept[k]
-                            up._touch(nav)
-                            k = k + 1
-                        }
-                        _fill_layouts(cur, layouts, depth, factory, nav)
-                        rs.json({"id": here.id, "html": _body(here), "title": here.title(), "kept": true})
-                        return
-                    }
-                    comp := _make_in_layouts(layouts, factory, nav)
-                    _leave(r)
-                    rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
-                    return
-                }
-                comp := _make(factory, nav)
-                _leave(r)
-                rs.json({"id": comp.id, "html": _body(comp), "title": comp.title()})
+                layouts: List = entry.length() > 2 and entry[2] != null ? entry[2] : []   // (live.page(): none)
+                from_id := r.query.has("from") ? String(r.query["from"]) : ""
+                _nav_show(r, rs, nav, layouts, kinds, factory, from_id, null, 200)
                 return
             }
+        }
+        if _special.has("404") {                   // the not-found page, in place
+            _show_special("404", r, rs, 404, "", "")
+            return
         }
         rs.json({"reload": true})                  // not a live page: load it normally
     })
@@ -3715,14 +3847,7 @@ struct Router : web.Router {
             made._guard = guard
             return made
         }
-        kinds := []
-        for l in layouts {
-            maker: Callable = l
-            probe := maker()
-            kind := type_name(probe)
-            if not has_field(probe, "_serial") { throw ValueError("live: layout=" + kind + " isn't a live.Layout") }
-            kinds.append(kind)
-        }
+        kinds := _layout_kinds(layouts)
         _pages.append([web.Route("GET", path, make), make, layouts, kinds, guard])
         self.get(path, fn(req, res) {
             r: web.Request = req
@@ -3747,6 +3872,31 @@ struct Router : web.Router {
     ---
     define group(self, layout: Callable = null, guard: Callable = null) -> RouteGroup {
         return RouteGroup(self, layout != null ? [layout] : [], guard != null ? [guard] : [])
+    }
+
+    ---
+    The page shown for a path no page or route has — `router.not_found(NotFoundPage)`
+    — with the 404 status, in `layout` if given (on a group: in the group's
+    layouts). Also for a q-link to such a path (the layout stays, the URL
+    doesn't change), and for `throw web.HttpError(404, …)` in a page. It can
+    have the fields `status` (404), `message` (the HttpError's) and `path`.
+    ---
+    define not_found(self, page: Callable, layout: Callable = null) -> Router {
+        _set_special(self, "404", page, layout != null ? [layout] : [])
+        return self
+    }
+
+    ---
+    The page shown when a page fails — an exception in `on_load`, in rendering,
+    or in an event handler — instead of a plain 500: `router.error_page(ErrorPage)`,
+    in `layout` if given. Its fields, the ones it has: `status` (500, or an
+    HttpError's), `message` (an HttpError's, meant for the visitor; "" for any
+    other exception) and `error` (the exception and where it happened — only
+    when QUIRK_ENV isn't "production": visitors never see it).
+    ---
+    define error_page(self, page: Callable, layout: Callable = null) -> Router {
+        _set_special(self, "500", page, layout != null ? [layout] : [])
+        return self
     }
 }
 
@@ -3779,6 +3929,18 @@ struct RouteGroup {
     --- Serve `page` at `path`, in the group's layouts, behind its guards. ---
     define add(self, path: String, page: Callable) -> RouteGroup {
         self.router._add_chain(path, page, self.layouts, self.guards)
+        return self
+    }
+
+    --- The not-found page (Router.not_found), in the group's layouts. ---
+    define not_found(self, page: Callable) -> RouteGroup {
+        _set_special(self.router, "404", page, self.layouts)
+        return self
+    }
+
+    --- The error page (Router.error_page), in the group's layouts. ---
+    define error_page(self, page: Callable) -> RouteGroup {
+        _set_special(self.router, "500", page, self.layouts)
         return self
     }
 
@@ -3880,12 +4042,14 @@ struct TestSession {
     define send(self, event: String, data: Map = {}) -> TestSession {
         res := self.client.post_json("/_live/event", {"id": self.id, "event": event, "data": data})
         self.status = res.status_code
-        if res.status_code != 200 { return self }
+        // (a failing event can answer with the error page — JSON with a 500)
+        if res.status_code != 200 and not res.body.startswith("{") { return self }
         m: Map = json.loads(res.body)
         if m.has("redirect") {
             self.navigate(String(m["redirect"]))
             return self
         }
+        if m.has("id") { self.id = String(m["id"]) }
         if m.has("html") { self.html = String(m["html"]) }
         if m.has("title") { self.title = String(m["title"]) }
         return self

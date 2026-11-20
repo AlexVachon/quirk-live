@@ -12,3 +12,6 @@
 /* live's form validation: <FieldError> and the inputs in error */
 .q-error { color: #dc2626; margin: 0; font-size: .9rem; }
 input[aria-invalid="true"] { border-color: #dc2626; outline-color: #dc2626; }
+
+/* the not-found / error pages (src/pages/errors.qk) */
+.error-detail { background: #fef2f2; color: #991b1b; padding: .75rem; overflow-x: auto; font-size: .85rem; white-space: pre-wrap; }

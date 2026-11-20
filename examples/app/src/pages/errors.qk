@@ -1,0 +1,47 @@
+use live
+
+---
+Shown, in MainLayout, for a path no page has (router.qk: main.not_found) —
+also for a q-link to one, and for `throw web.HttpError(404, …)` in a page.
+live fills the fields it has: `status`, `message`, `path`.
+---
+struct NotFoundPage : live.Page {
+    message: String
+    path: String
+
+    define title(self) -> String {
+        return "Not found"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Nothing here</h1>
+            <p class="not-found">There's no page at <code>{{ path }}</code>.{% if message %} {{ message }}{% end %}</p>
+            <p><a href="/" q-link>Back to the counter</a></p>
+        """
+    }
+}
+
+---
+Shown, in MainLayout, when a page fails — an exception in on_load or in an
+event (router.qk: main.error_page). `error` (what failed, and where) is
+filled only when QUIRK_ENV isn't "production": visitors never see it.
+---
+struct ErrorPage : live.Page {
+    status: Int
+    message: String
+    error: String
+
+    define title(self) -> String {
+        return "Something went wrong"
+    }
+
+    define template(self) -> String {
+        return r"""
+            <h1>Something went wrong</h1>
+            <p class="error-page">{% if message %}{{ message }}{% else %}The page couldn't be shown ({{ status }}).{% end %}</p>
+            {% if error %}<pre class="error-detail">{{ error }}</pre>{% end %}
+            <p><a href="/" q-link>Back to the counter</a></p>
+        """
+    }
+}

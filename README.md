@@ -109,8 +109,8 @@ Its todos are kept in SQLite (`src/store.qk`, the
 `todos.db`): still there after a restart, shared by every visitor, and
 changed in every open tab at once (`live.publish`); accounts are real (sign up,
 passwords hashed with scrypt), and sessions are kept in the same database
-(`web.sqlite_store`): you stay logged in across restarts. The demo needs Quirk
-7.56.0 or later.
+(`web.sqlite_store`): you stay logged in across restarts. Its not-found and error
+pages are in `src/pages/errors.qk`. The demo needs Quirk 7.59.0 or later.
 
 **While you work: `quirk run --watch main.qk`** (Quirk 7.52.0+). Each time you
 save a `.qk`, `.html`, `.css` or `.js` file of the project, the server is
@@ -399,6 +399,55 @@ admin.add("/admin/users", UsersPage)
 - Guards add up: an inner group's pages are behind the outer group's guard
   *and* its own (the first one that turns the visitor away decides).
 - Groups nest as deep as you like: `admin.group(layout=ReportsLayout)`.
+
+## Not-found and error pages
+
+Pages of your own instead of a plain "Not Found" / "Internal Server Error" —
+in a group, they're shown in its layout:
+
+```quirk
+main := router.group(layout=MainLayout)
+main.add("/", HomePage)
+main.not_found(NotFoundPage)        // or router.not_found(NotFoundPage, layout=MainLayout)
+main.error_page(ErrorPage)
+```
+
+```quirk
+struct NotFoundPage : live.Page {
+    path: String                    // live fills the fields it has
+    define template(self) -> String {
+        return r"""<h1>Nothing here</h1><p>No page at <code>{{ path }}</code>.</p>"""
+    }
+}
+
+struct ErrorPage : live.Page {
+    status: Int
+    message: String
+    error: String
+    define template(self) -> String {
+        return r"""
+            <h1>Something went wrong</h1>
+            <p>{% if message %}{{ message }}{% else %}Please try again.{% end %}</p>
+            {% if error %}<pre>{{ error }}</pre>{% end %}
+        """
+    }
+}
+```
+
+- **Not found** — a path no page or route has: the page with a 404. A q-link to
+  one shows it in place (the layout stays; the URL is the one asked for).
+  `throw web.HttpError(404, "No such todo")` in a page shows it too, with that
+  `message`.
+- **Errors** — an exception in a page's `on_load`, its rendering, or an event
+  handler: the error page, in the layout, with a 500. An `HttpError` (403, 400 …)
+  shows its `status` and `message` (meant for the visitor); any other exception
+  has an empty `message`, and `error` — what failed and where — is filled only
+  when `QUIRK_ENV` isn't `production`: visitors never see it. It's printed on
+  the server either way.
+- Fields the page has get filled: `status`, `message`, `path` (not found),
+  `error` (errors).
+- Requests that aren't for a page (an API call, a missing image) still get the
+  plain answer.
 
 ## Login
 

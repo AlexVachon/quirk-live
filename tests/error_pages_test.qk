@@ -1,0 +1,154 @@
+// Not-found and error pages of your own, in the layout: router.not_found /
+// error_page (or a group's) — for a page load, a q-link, an event.
+use web
+use live
+use test
+
+struct Frame : live.Layout {
+    define template(self) -> String {
+        return r"""<header>frame</header><main><slot /></main>"""
+    }
+}
+
+struct Home : live.Page {
+    define template(self) -> String {
+        return r"""<p>home</p><button @click="explode">explode</button>"""
+    }
+    define explode(self) -> void {
+        throw ValueError("the button broke")
+    }
+}
+
+struct Boom : live.Page {
+    define on_load(self) -> void {
+        throw ValueError("kaboom")
+    }
+}
+
+struct Missing : live.Page {
+    define on_load(self) -> void {
+        throw web.HttpError(404, "No such todo")
+    }
+}
+
+struct Forbidden : live.Page {
+    define on_load(self) -> void {
+        throw web.HttpError(403, "Not yours")
+    }
+}
+
+struct NotFoundPage : live.Page {
+    status: Int
+    message: String
+    path: String
+    define title(self) -> String {
+        return "Not found"
+    }
+    define template(self) -> String {
+        return r"""<h1>nothing at {{ path }}</h1><p class="m">{{ message }}</p><p class="s">{{ status }}</p>"""
+    }
+}
+
+struct ErrorPage : live.Page {
+    status: Int
+    message: String
+    error: String
+    define title(self) -> String {
+        return "Something went wrong"
+    }
+    define template(self) -> String {
+        return r"""<h1>oops {{ status }}</h1><p class="m">{{ message }}</p><pre class="e">{{ error }}</pre><button @click="again">again</button>"""
+    }
+    define again(self) -> void {
+        self.go("/")
+    }
+}
+
+define make_app(with_pages: Bool) -> web.App {
+    router := live.Router()
+    main := router.group(layout=Frame)
+    main.add("/", Home)
+    main.add("/boom", Boom)
+    main.add("/missing", Missing)
+    main.add("/forbidden", Forbidden)
+    if with_pages {
+        main.not_found(NotFoundPage)
+        main.error_page(ErrorPage)
+    }
+    router.get("/api/ping", fn(req, res) {
+        rs: web.Response = res
+        rs.json({"ok": true})
+    })
+    app := web.App()
+    app.mount("/", router)
+    return app
+}
+
+define test_not_found_page_in_the_layout() -> void {
+    s := live.TestSession(make_app(true))
+    s.open("/no/such/page")
+    test.assert_eq(s.status, 404)
+    test.assert_true(s.html.contains("<header>frame</header><main><h1>nothing at /no/such/page</h1>"), s.html)
+    test.assert_true(s.html.contains("<title>Not found</title>"))
+    test.assert_true(s.html.contains("<p class=\"s\">404</p>"))
+    // Not a page request (an API call, an asset): the plain answer.
+    api := s.client.get("/api/nothing", {"Accept": "application/json"})
+    test.assert_eq(api.status_code, 404)
+    test.assert_eq(api.body, "Not Found")
+    test.assert_eq(s.client.get("/api/ping").status_code, 200)
+}
+
+define test_not_found_by_q_link_keeps_the_layout() -> void {
+    s := live.TestSession(make_app(true))
+    s.open("/")
+    id := s.id
+    s.navigate("/gone")
+    test.assert_eq(s.status, 404)
+    test.assert_eq(s.id, id)                                     // the same layout, kept
+    test.assert_true(s.html.contains("<main><h1>nothing at /gone</h1>"), s.html)
+    test.assert_eq(s.title, "Not found")
+    s.navigate("/")
+    test.assert_true(s.html.contains("<p>home</p>"))
+}
+
+define test_error_pages_for_page_loads() -> void {
+    s := live.TestSession(make_app(true))
+    s.open("/boom")
+    test.assert_eq(s.status, 500)
+    test.assert_true(s.html.contains("<header>frame</header><main><h1>oops 500</h1>"), s.html)
+    test.assert_true(s.html.contains("<p class=\"m\"></p>"))           // no message for an unexpected error
+    test.assert_true(s.html.contains("ValueError: kaboom"))              // the detail (not in production)
+    s.open("/missing")                                                  // HttpError(404) in a page: the not-found page
+    test.assert_eq(s.status, 404)
+    test.assert_true(s.html.contains("nothing at /missing"))
+    test.assert_true(s.html.contains("<p class=\"m\">No such todo</p>"))
+    s.open("/forbidden")                                                // another HttpError: the error page, its status and message
+    test.assert_eq(s.status, 403)
+    test.assert_true(s.html.contains("<h1>oops 403</h1>"))
+    test.assert_true(s.html.contains("<p class=\"m\">Not yours</p>"))
+}
+
+define test_error_in_an_event_and_after() -> void {
+    s := live.TestSession(make_app(true))
+    s.open("/")
+    s.click("explode")
+    test.assert_eq(s.status, 500)
+    test.assert_true(s.html.contains("<header>frame</header><main><h1>oops 500</h1>"), s.html)
+    test.assert_true(s.html.contains("ValueError: the button broke"))
+    s.click("again")                                                    // the error page works: go("/")
+    test.assert_eq(s.location, "/")
+    test.assert_true(s.html.contains("<p>home</p>"), s.html)
+    s.navigate("/boom")                                                 // a q-link to a page that fails
+    test.assert_eq(s.status, 500)
+    test.assert_true(s.html.contains("oops 500"))
+}
+
+define test_without_pages_of_your_own() -> void {
+    s := live.TestSession(make_app(false))
+    s.open("/no/such/page")
+    test.assert_eq(s.status, 404)
+    test.assert_eq(s.html, "Not Found")
+    s.open("/forbidden")
+    test.assert_eq(s.status, 403)
+    test.assert_eq(s.html, "Not yours")
+}

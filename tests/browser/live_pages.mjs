@@ -207,6 +207,18 @@ go('/hello/world');
 check(await until(() => !!d().getElementById('hello')) && scratch().value === 'remember me', 'Hello too, the text still there');
 check(link('/hello/world').classList.contains('active'), 'path.startswith(\'/hello\') marks it');
 
+// A q-link to a path no page has: our not-found page, in the layout, in place.
+const stray = d().createElement('a');
+stray.setAttribute('href', '/no/such/page');
+stray.setAttribute('q-link', '');
+stray.textContent = 'stray';
+d().querySelector('.layout section.page').appendChild(stray);
+stray.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+check(await until(() => !!d().querySelector('.not-found')), 'a q-link to nothing: the not-found page');
+check(d().querySelector('.not-found').textContent.includes('/no/such/page') && d().title === 'Not found', 'it names the path; its title');
+check(d().querySelector('.layout nav') === nav && scratch().value === 'remember me', 'in the same layout (kept)');
+check(w.location.pathname === '/no/such/page', 'the URL: ' + w.location.pathname);
+
 // Login: a guarded page, the login form, back to it; then log out.
 go('/account');
 check(await until(() => !!input('Password')), 'Account (guarded): the login page instead');
