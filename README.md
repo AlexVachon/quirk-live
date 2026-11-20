@@ -108,14 +108,16 @@ Its todos are kept in SQLite (`src/store.qk`, the
 [`sqlite`](https://github.com/AlexVachon/quirk-sqlite) package, in
 `todos.db`): still there after a restart, shared by every visitor, and
 changed in every open tab at once (`live.publish`); accounts are real (sign up,
-passwords hashed with scrypt). The demo needs Quirk 7.55.0 or later.
+passwords hashed with scrypt), and sessions are kept in the same database
+(`web.sqlite_store`): you stay logged in across restarts. The demo needs Quirk
+7.56.0 or later.
 
 **While you work: `quirk run --watch main.qk`** (Quirk 7.52.0+). Each time you
 save a `.qk`, `.html`, `.css` or `.js` file of the project, the server is
 checked and started again, and the open tabs reload by themselves. If what you
 saved doesn't compile, the errors are shown and the running version keeps
 running. (What a page holds — fields, a half-typed form — starts anew; what's
-in a database, or in the session's cookie, stays.)
+in a database stays, sessions too with `web.sqlite_store`.)
 
 ## Components
 

@@ -5,13 +5,16 @@ use web
 use sys
 
 from router use { router }
+from src.store use { db }
 
 const PORT: Int = 3000
 
 define main() -> void {
     app := web.App()
     app.use(web.static("public"))
-    app.use(web.sessions())          // the visitor's session: login (src/pages/login.qk)
+    // The visitor's session (login: src/pages/login.qk), kept in the app's
+    // database — it lasts across restarts (and every save under --watch).
+    app.use(web.sessions(store=web.sqlite_store(db=db())))
     app.mount("/", router)
     
     app.listen(PORT)
